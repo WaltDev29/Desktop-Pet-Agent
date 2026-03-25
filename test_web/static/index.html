@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OS Automation Agent</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5; }
+        #chat-container { max-width: 800px; margin: 0 auto; background: white; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); overflow: hidden; display: flex; flex-direction: column; height: 80vh; }
+        #messages { flex-grow: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; }
+        .message { padding: 12px 16px; border-radius: 8px; max-width: 80%; line-height: 1.5; }
+        .user-message { background-color: #007bff; color: white; align-self: flex-end; }
+        .agent-message { background-color: #e9ecef; color: #333; align-self: flex-start; }
+        #input-area { display: flex; padding: 15px; border-top: 1px solid #dee2e6; background: #fff; }
+        #message-input { flex-grow: 1; padding: 12px; border: 1px solid #ced4da; border-radius: 6px; outline: none; font-size: 16px; }
+        #send-btn { background-color: #007bff; color: white; border: none; padding: 12px 20px; margin-left: 10px; border-radius: 6px; cursor: pointer; font-size: 16px; font-weight: bold; }
+        #send-btn:hover { background-color: #0056b3; }
+        
+        /* Approval Modal Styles */
+        #approval-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); justify-content: center; align-items: center; }
+        .modal-content { background: white; padding: 30px; border-radius: 10px; max-width: 500px; text-align: center; box-shadow: 0 5px 15px rgba(0,0,0,0.3); }
+        .modal-title { color: #dc3545; margin-bottom: 15px; font-weight: bold; }
+        .modal-actions { margin-top: 25px; display: flex; justify-content: center; gap: 15px; }
+        .btn-approve { background: #28a745; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 16px; font-weight: bold; }
+        .btn-reject { background: #dc3545; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 16px; font-weight: bold; }
+        
+        pre { white-space: pre-wrap; font-family: monospace; background: #f8f9fa; padding: 10px; border-radius: 5px; text-align: left; }
+    </style>
+</head>
+<body>
+
+<div id="chat-container">
+    <div id="messages">
+        <div class="message agent-message">안녕하세요! 시스템 자원을 모니터링하거나 파일을 제어하고, 웹 검색을 도와드릴 수 있는 AI 에이전트입니다. 무엇을 도와드릴까요?</div>
+    </div>
+    <div id="input-area">
+        <input type="text" id="message-input" placeholder="메시지를 입력하세요 (예: D드라이브 파일 목록 보여줘)..." onkeypress="handleKeyPress(event)">
+        <button id="send-btn" onclick="sendMessage()">전송</button>
+    </div>
+</div>
+
+<!-- Approval Modal -->
+<div id="approval-modal">
+    <div class="modal-content">
+        <h2 class="modal-title">⚠️ 위험 작업 승인 요청</h2>
+        <p id="approval-text">에이전트가 시스템에 치명적인 영향을 줄 수 있는 작업을 실행하려고 합니다.</p>
+        <div class="modal-actions">
+            <button class="btn-reject" onclick="handleApproval(false)">❌ 거절 (취소)</button>
+            <button class="btn-approve" onclick="handleApproval(true)">✅ 허용 (실행)</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    let currentToolCallId = null;
+
+    function addMessage(text, isUser) {
+        const messagesDiv = document.getElementById('messages');
+        const msgDiv = document.createElement('div');
+        msgDiv.className = `message ${isUser ? 'user-message' : 'agent-message'}`;
+        // 간단한 마크다운 처리 (줄바꿈만)
+        msgDiv.innerHTML = text.replace(/\n/g, '<br>');
+        messagesDiv.appendChild(msgDiv);
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
+    async function sendMessage() {
+        const input = document.getElementById('message-input');
+        const text = input.value.trim();
+        if (!text) return;
+
+        addMessage(text, true);
+        input.value = '';
+        input.disabled = true;
+        document.getElementById('send-btn').disabled = true;
+
+        try {
+            const response = await fetch('/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: text })
+            });
+            const data = await response.json();
+
+            if (data.status === 'approval_required') {
+                showApprovalModal(data.message, data.tool_call_id);
+            } else if (data.status === 'success') {
+                addMessage(data.message, false);
+            } else {
+                addMessage(`오류 발생: ${data.message}`, false);
+            }
+        } catch (error) {
+            addMessage(`통신 오류: ${error.message}`, false);
+        } finally {
+            input.disabled = false;
+            document.getElementById('send-btn').disabled = false;
+            input.focus();
+        }
+    }
+
+    function handleKeyPress(e) {
+        if (e.key === 'Enter') sendMessage();
+    }
+
+    function showApprovalModal(message, toolCallId) {
+        document.getElementById('approval-text').innerText = message;
+        currentToolCallId = toolCallId;
+        document.getElementById('approval-modal').style.display = 'flex';
+    }
+
+    async function handleApproval(isApproved) {
+        document.getElementById('approval-modal').style.display = 'none';
+        
+        addMessage(isApproved ? "[시스템] ✅ 작업 실행이 승인되었습니다." : "[시스템] ❌ 작업 실행이 거절되었습니다. 에이전트에게 피드백을 전달합니다.", false);
+
+        try {
+            const response = await fetch('/approve', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ approve: isApproved, tool_call_id: currentToolCallId })
+            });
+            const data = await response.json();
+            
+            if (data.status === 'success') {
+                addMessage(data.message, false);
+            } else {
+                addMessage(`[시스템 알림] ${data.message}`, false);
+            }
+        } catch (error) {
+            addMessage(`통신 오류: ${error.message}`, false);
+        }
+    }
+</script>
+
+</body>
+</html>
