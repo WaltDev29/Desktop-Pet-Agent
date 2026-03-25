@@ -1,8 +1,8 @@
 # Desktop Pet Agent
 <img width="1536" height="1024" alt="프로젝트logo" src="https://github.com/user-attachments/assets/485706df-908c-4873-96da-6db80db1f082" />
-Desktop Pet Agent는 데스크톱 화면 위에서 동작하는 캐릭터 기반 인터페이스와 AI Agent 기능을 결합한 프로그램이다. 화면 위에 표시되는 캐릭터가 사용자와 상호작용하며 다양한 작업을 수행하는 AI 기반 데스크톱 보조 시스템을 목표로 한다.  
+Desktop Pet Agent는 데스크톱 화면 위에서 동작하는 캐릭터 기반 인터페이스와 AI Agent 기능을 결합한 프로그램입니다. 화면 위에 표시되는 캐릭터가 사용자와 상호작용하며 다양한 작업을 수행하는 AI 기반 데스크톱 보조 시스템을 목표로 합니다.  
 <br>  
-이 프로젝트는 GUI 인터페이스, AI Agent, 시스템 제어 Tool, AI Agent 제어 App 구조를 결합하여 사용자의 자연어 명령을 기반으로 다양한 작업을 수행할 수 있도록 설계되었다.
+이 프로젝트는 GUI 인터페이스, AI Agent, 시스템 제어 Tool, AI Agent 제어 App 구조를 결합하여 사용자의 자연어 명령을 기반으로 다양한 작업을 수행할 수 있도록 설계되었습니다.
 
 <br>
 
@@ -23,7 +23,7 @@ Desktop Pet Agent는 데스크톱 화면 위에서 동작하는 캐릭터 기반
 <br>
 
 # 시스템 구조
-프로젝트는 다음과 같은 모듈 구조로 구성된다.
+프로젝트는 다음과 같은 모듈 구조로 구성됩니다.
 ```
 Desktop Pet Agent  
 │  
@@ -49,6 +49,7 @@ Desktop Pet Agent
 
 ### AI Agent
 - LangChain
+- LangGraph
 
 ### Tool API
 - PyAutoGUI
