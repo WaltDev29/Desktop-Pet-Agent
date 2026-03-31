@@ -8,7 +8,7 @@ from langgraph.prebuilt import ToolNode
 
 from .state import AgentState
 from .nodes import make_agent_node, human_approval_node, route_after_agent
-from tool import tools
+from agent_server.tool_client import tools
 
 # ==========================================
 # 환경변수 Load
