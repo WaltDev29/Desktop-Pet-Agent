@@ -1,16 +1,18 @@
 import psutil
-from langchain_core.tools import tool
 
 # ==========================================
+# MCP_server/tools/system_monitor.py
 # System Monitor Tool: 사용자의 PC 하드웨어와 리소스 현황을 모니터링합니다.
 # "내 컴퓨터 CPU 너무 많이 써?", "쓸데없이 돌아가는 프로세스 꺼줘" 등의 
 # 요청을 처리하기 위한 기반 데이터를 수집합니다.
 # ==========================================
 
+
 def get_cpu_usage() -> str:
     """현재 CPU 사용률을 측정하여 몇 퍼센트인지 문자열로 반환합니다."""
     usage = psutil.cpu_percent(interval=1)
     return f"CPU Usage: {usage}%"
+
 
 def get_memory_usage() -> str:
     """전체 RAM 크기와 현재 사용 중인 메모리 양, 그리고 비율(%)을 반환합니다."""
@@ -18,6 +20,7 @@ def get_memory_usage() -> str:
     total = round(mem.total / (1024 ** 3), 2)  # 바이트를 기가바이트(GB)로 변환
     used = round(mem.used / (1024 ** 3), 2)
     return f"Memory Usage: {used}GB / {total}GB ({mem.percent}%)"
+
 
 def get_disk_usage(path: str = "C:\\") -> str:
     """
@@ -31,6 +34,7 @@ def get_disk_usage(path: str = "C:\\") -> str:
         return f"Disk Usage ({path}): {used}GB / {total}GB ({disk.percent}%)"
     except Exception as e:
         return f"Error accessing disk info for {path}: {str(e)}"
+
 
 def list_processes(limit: int = 10) -> str:
     """
@@ -52,37 +56,3 @@ def list_processes(limit: int = 10) -> str:
     for p in processes[:limit]:
         result += f"PID: {p['pid']}, Name: {p['name']}, CPU: {p['cpu_percent']}%\n"
     return result
-
-
-
-# ==========================================
-# Tool 등록
-# ==========================================
-@tool
-def get_cpu_usage_tool() -> str:
-    """CPU 사용률을 퍼센테이지로 반환합니다."""
-    return get_cpu_usage()
-
-@tool
-def get_memory_usage_tool() -> str:
-    """메모리 사용 현황을 반환합니다."""
-    return get_memory_usage()
-
-@tool
-def get_disk_usage_tool(path: str = "C:\\") -> str:
-    """지정된 경로의 디스크 사용량을 반환합니다."""
-    return get_disk_usage(path)
-
-@tool
-def list_processes_tool(limit: int = 10) -> str:
-    """CPU를 많이 사용하는 상위 {limit}개의 프로세스를 반환합니다."""
-    return list_processes(limit)
-
-
-
-tools = [
-    get_cpu_usage_tool,
-    get_memory_usage_tool,
-    get_disk_usage_tool,
-    list_processes_tool
-    ]
