@@ -5,10 +5,10 @@ from io import BytesIO
 import pyautogui
 from mcp.server.fastmcp import FastMCP
 
-from .tools.monitor_tool import get_screen_info, capture_and_ocr
-from .tools.filesystem_tool import list_directory, read_file, write_file, delete_file
-from .tools.system_monitor import get_cpu_usage, get_memory_usage, get_disk_usage, list_processes
-from .tools.web_serch_tool import search_web
+from tools.monitor_tool import get_screen_info, capture_and_ocr
+from tools.filesystem_tool import list_directory, read_file, write_file, delete_file
+from tools.system_monitor import get_cpu_usage, get_memory_usage, get_disk_usage, list_processes
+from tools.web_serch_tool import search_web
 
 # ==========================================
 # MCP_server/main.py — MCP 서버 진입점
@@ -222,4 +222,4 @@ def search_web_tool(query: str) -> str:
 # ==========================================
 
 if __name__ == "__main__":
-    mcp.run(transport="sse", host="0.0.0.0", port=8002)
+    mcp.run(transport="stdio")

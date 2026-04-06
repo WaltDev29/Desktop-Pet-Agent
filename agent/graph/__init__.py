@@ -8,7 +8,6 @@ from langgraph.prebuilt import ToolNode
 
 from .state import AgentState
 from .nodes import make_agent_node, human_approval_node, route_after_agent
-from agent_server.tool_client import tools
 
 # ==========================================
 # 환경변수 Load
@@ -28,7 +27,13 @@ else:
 
 
 
-def create_agent():
+async def create_agent():
+    # ==========================================
+    # 도구 가져오기 (MCP 클라이언트)
+    # ==========================================
+    from agent_server.mcp_client import get_mcp_tools
+    tools = await get_mcp_tools()
+
     # ==========================================
     # LLM 초기화 및 도구 바인딩
     # ==========================================
