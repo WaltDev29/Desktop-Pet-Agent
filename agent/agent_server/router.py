@@ -3,8 +3,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from langchain_core.messages import HumanMessage, ToolMessage
-
-from .tool_client import _call_tool_server
+from .mcp_client import get_mcp_tools
 
 # ==========================================
 # 전역 대화 상태
@@ -23,19 +22,19 @@ class ApprovalRequest(BaseModel):
     tool_call_id: str      # 승인/거절 대상 Tool의 고유 ID
 
 
-def get_agent():
+async def get_agent():
     """순환 임포트 방지를 위해 agent를 지연 import합니다."""
     from graph import create_agent
-    return create_agent()
+    return await create_agent()
 
 
 # Agent 인스턴스 (서버 시작 시 1회 초기화)
 _agent = None
 
-def _get_or_create_agent():
+async def _get_or_create_agent():
     global _agent
     if _agent is None:
-        _agent = get_agent()
+        _agent = await get_agent()
     return _agent
 
 
@@ -47,16 +46,16 @@ async def chat_endpoint(request: ChatRequest):
     - 위험 Tool(파일 삭제 등): human_approval 상태로 반환, Web UI에서 승인 모달 표시
     """
     global current_state
-    agent = _get_or_create_agent()
 
     # [1] 사용자 메시지 상태에 추가
     current_state["messages"].append(HumanMessage(content=request.message))
 
     try:
+        agent = await _get_or_create_agent()
         # [2] LangGraph 에이전트 실행
         #     - 일반 Tool: ToolNode → proxy → Tool Server HTTP 호출 → 결과 반환
         #     - 위험 Tool: human_approval_node에서 그래프 정지
-        result = agent.invoke(current_state)
+        result = await agent.ainvoke(current_state)
         current_state = result
 
         # [3] 위험 Tool 승인 대기 상태인 경우
@@ -76,8 +75,10 @@ async def chat_endpoint(request: ChatRequest):
         })
 
     except Exception as e:
+        import traceback
+        trace_str = traceback.format_exc()
         return JSONResponse(
-            content={"status": "error", "message": str(e)},
+            content={"status": "error", "message": f"에이전트 실행 실패: {str(e)}\n{trace_str}"},
             status_code=500,
         )
 
@@ -90,7 +91,7 @@ async def approve_endpoint(request: ApprovalRequest):
     - 거절: 거절 메시지를 ToolMessage로 상태에 추가 → 에이전트 재개
     """
     global current_state
-    agent = _get_or_create_agent()
+    agent = await _get_or_create_agent()
 
     if not current_state.get("pending_tool_call"):
         return JSONResponse(content={"status": "error", "message": "대기 중인 Tool 호출이 없습니다."})
@@ -99,34 +100,42 @@ async def approve_endpoint(request: ApprovalRequest):
     if not hasattr(last_message, "tool_calls") or not last_message.tool_calls:
         return JSONResponse(content={"status": "error", "message": "마지막 메시지에 tool_calls가 없습니다."})
 
-    # [허용] 클릭: Tool Server에 approved=True로 요청
+    # [허용] 클릭: Tool Server에 직접 권한을 획득하여 툴 실행
     if request.approve:
-        for tc in last_message.tool_calls:
-            tool_name = tc["name"]
-            tool_args = tc["args"]
-            tool_call_id = tc["id"]
-
-            # Tool Server에 직접 HTTP 요청 (approved=True 플래그 포함)
-            tool_result = _call_tool_server(tool_name, tool_args, approved=True)
-
-            # LLM이 Tool 결과를 읽을 수 있도록 ToolMessage로 상태에 추가
-            tool_message = ToolMessage(
-                content=str(tool_result),
-                name=tool_name,
-                tool_call_id=tool_call_id,
-            )
-            current_state["messages"].append(tool_message)
-
-        current_state["pending_tool_call"] = None
-
         try:
-            result = agent.invoke(current_state)
+            tools = await get_mcp_tools()
+            tool_map = {t.name: t for t in tools}
+
+            for tc in last_message.tool_calls:
+                tool_name = tc["name"]
+                tool_args = tc["args"]
+                tool_call_id = tc["id"]
+
+                # MCP 환경에서 안전하게 우회된 구조를 통해 직접 호출
+                if tool_name in tool_map:
+                    tool_obj = tool_map[tool_name]
+                    tool_result = await tool_obj.ainvoke(tool_args)
+                    result_content = str(tool_result)
+                else:
+                    result_content = f"에러: {tool_name} 도구를 찾을 수 없습니다."
+
+                # LLM이 Tool 결과를 읽을 수 있도록 ToolMessage로 상태에 추가
+                tool_message = ToolMessage(
+                    content=result_content,
+                    name=tool_name,
+                    tool_call_id=tool_call_id,
+                )
+                current_state["messages"].append(tool_message)
+
+            current_state["pending_tool_call"] = None
+
+            result = await agent.ainvoke(current_state)
             current_state = result
             last_msg = result["messages"][-1]
             return JSONResponse(content={"status": "success", "message": last_msg.content})
         except Exception as e:
             return JSONResponse(
-                content={"status": "error", "message": f"에이전트 재개 오류: {str(e)}"},
+                content={"status": "error", "message": f"승인 후 툴 실행 및 에이전트 재개 오류: {str(e)}"},
                 status_code=500,
             )
 
@@ -143,7 +152,7 @@ async def approve_endpoint(request: ApprovalRequest):
         current_state["pending_tool_call"] = None
 
         try:
-            result = agent.invoke(current_state)
+            result = await agent.ainvoke(current_state)
             current_state = result
             last_msg = result["messages"][-1]
             return JSONResponse(content={"status": "rejected", "message": last_msg.content})
