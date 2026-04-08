@@ -158,10 +158,23 @@ def make_general_worker(llm_with_tools: Runnable):
 def make_aggregator_node(llm: Runnable):
     def aggregator_node(state: AgentState):
         from prompts.agents_prompts import AGGREGATOR_PROMPT
-        original_msg = state['messages'][0].content if state['messages'] else ""
-        prompt = f"Original user request: {original_msg}\nPast Results: {state.get('past_results', [])}"
+
+        # 가장 마지막 HumanMessage를 현재 사용자 요청으로 사용
+        # (messages[0]은 대화가 쌓이면 과거 메시지가 되므로 사용하지 않음)
+        current_request = ""
+        for msg in reversed(state["messages"]):
+            if isinstance(msg, HumanMessage):
+                current_request = msg.content
+                break
+
+        past = state.get("past_results", [])
+        if past:
+            prompt = f"Current user request: {current_request}\nWorker Results: {past}"
+        else:
+            # Tool 결과가 없는 단순 대화
+            prompt = f"Current user request: {current_request}\n(No tool results — this is a direct conversation, respond naturally.)"
+
         msgs = [SystemMessage(content=AGGREGATOR_PROMPT), HumanMessage(content=prompt)]
-        
         response = llm.invoke(msgs)
         return {"messages": [response], "next_step": "end"}
     return aggregator_node
