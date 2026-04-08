@@ -170,7 +170,7 @@ class PetWindow(QWidget):
         self.pet_label.setAlignment(Qt.AlignCenter)  
         self.pet_label.setScaledContents(True) 
         
-        self.movie = QMovie("assets/pet2.gif") 
+        self.movie = QMovie("assets/pet.gif") 
         self.pet_label.setMovie(self.movie)
         self.movie.start()
 
