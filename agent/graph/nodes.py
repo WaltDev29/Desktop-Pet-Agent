@@ -1,211 +1,348 @@
+"""
+agent/graph/nodes.py
+
+LangGraph 그래프를 구성하는 모든 노드 및 조건부 엣지 함수를 정의합니다.
+
+노드 구조:
+  [Planner] → [Master Router] → [Vision / General Worker] ↔ [ToolNode]
+                                                         ↓
+                                                    [Aggregator] → END
+
+사용자 승인 흐름:
+  Worker가 위험 도구를 감지하면 interrupt()로 그래프를 일시정지합니다.
+  /approve API에서 Command(resume=True/False)로 재개하면 Worker가 이어서 실행됩니다.
+"""
+
 import json
+import logging
+import base64 as b64lib
+from io import BytesIO
 from typing import Literal
+
+from PIL import Image
 from pydantic import BaseModel
 from langchain_core.runnables import Runnable
-from langchain_core.messages import SystemMessage, ToolMessage, HumanMessage, AIMessage
+from langchain_core.messages import SystemMessage, ToolMessage, HumanMessage
+from langgraph.types import interrupt
+
 from .state import AgentState
+from prompts.agents_prompts import (
+    PLANNER_PROMPT,
+    ROUTER_PROMPT,
+    VISION_WORKER_PROMPT,
+    GENERAL_WORKER_PROMPT,
+    AGGREGATOR_PROMPT,
+)
+
+logger = logging.getLogger(__name__)
+
+# ==========================================
+# 상수
+# ==========================================
 
 # Structured Output 모델: Master Router가 반환할 worker 이름
 class WorkerDecision(BaseModel):
     worker: Literal["vision_worker", "general_worker"]
 
-# ============ 위험 도구 목록============
+# 실행 전 사용자 승인이 필요한 위험 도구 목록
 DANGEROUS_TOOLS = ["write_file_tool", "delete_file_tool"]
 
-def human_approval_node(state: AgentState):
-    """위험 작업 실행 흐름 대기용 더미 노드"""
-    return {}
+# Worker 1회 태스크당 최대 도구 호출 횟수 (무한 루프 방지)
+MAX_TOOL_CALLS = 5
 
 # ==========================================
 # 1. Planner Node
 # ==========================================
+
 def make_planner_node(llm: Runnable):
+    """
+    사용자의 요청을 분석해 단계별 실행 계획(Plan)을 수립합니다.
+    단순 대화의 경우 빈 plan을 반환하여 Aggregator로 바로 우회합니다.
+    """
     def planner_node(state: AgentState):
-        from prompts.agents_prompts import PLANNER_PROMPT
-        messages = [SystemMessage(content=PLANNER_PROMPT)] + state["messages"]
-        response = llm.invoke(messages)
-        
+        # 가장 마지막 HumanMessage를 원본 요청으로 저장 (Aggregator에서 정확하게 참조)
+        original_request = next(
+            (msg.content for msg in reversed(state["messages"]) if isinstance(msg, HumanMessage)),
+            ""
+        )
+
+        response = llm.invoke([SystemMessage(content=PLANNER_PROMPT)] + state["messages"])
+
         plan = []
         try:
             content = response.content
             if "{" in content and "}" in content:
-                start = content.find("{")
-                end = content.rfind("}") + 1
+                start, end = content.find("{"), content.rfind("}") + 1
                 data = json.loads(content[start:end])
                 if "plan" in data and isinstance(data["plan"], list):
                     plan = data["plan"]
-        except:
-            pass
-            
-        return {"plan": plan, "past_results": []}
+        except (json.JSONDecodeError, ValueError) as e:
+            # JSON 파싱 실패 → 빈 plan으로 Aggregator 직접 대화 처리
+            logger.warning(f"[Planner] JSON 파싱 실패, 단순 대화로 처리합니다. 원인: {e!r}")
+
+        return {
+            "plan": plan,
+            "past_results": [],
+            "tool_call_count": 0,
+            "original_request": original_request,
+        }
     return planner_node
+
 
 # ==========================================
 # 2. Master Router Node (LLM Structured Output 기반)
 # ==========================================
+
 def make_master_router_node(llm: Runnable):
-    # 라우터 전용 LLM: 단순 분기만 하므로 tools 없이 사용
+    """
+    Plan에서 다음 태스크를 꺼내고, LLM이 어느 Worker가 적합한지 판단합니다.
+    """
     router_llm = llm.with_structured_output(WorkerDecision)
 
     def master_router_node(state: AgentState):
-        from prompts.agents_prompts import ROUTER_PROMPT
-
         plan = state.get("plan", [])
         if not plan:
-            return {"current_task": "", "next_step": "aggregator"}
+            # 모든 계획 완료 → Aggregator로
+            return {"current_task": "", "active_worker": ""}
 
         current_task = plan[0]
         remaining_plan = plan[1:]
 
-        # LLM이 current_task를 보고 어떤 worker가 적합한지 판단
         decision: WorkerDecision = router_llm.invoke([
             SystemMessage(content=ROUTER_PROMPT),
-            HumanMessage(content=current_task)
+            HumanMessage(content=current_task),
         ])
 
+        logger.info(f"[Router] '{current_task[:40]}' → {decision.worker}")
         return {
             "plan": remaining_plan,
             "current_task": current_task,
             "active_worker": decision.worker,
-            "next_step": decision.worker
+            "tool_call_count": 0,  # 새 태스크 시작 시 카운터 초기화
         }
     return master_router_node
 
-# Worker Helper
-def format_worker_messages(state: AgentState, system_prompt: str):
-    msgs = [SystemMessage(content=system_prompt)]
-    msgs.append(HumanMessage(content=f"Sub-task: {state['current_task']}\nPast Results: {state.get('past_results', [])}"))
-    
-    # 툴 실행 결과를 Worker가 읽을 수 있도록 최근 ToolMessage 덧붙이기
-    recent_interaction = []
-    if len(state["messages"]) > 0:
-        for msg in reversed(state["messages"]):
-            if isinstance(msg, ToolMessage):
-                recent_interaction.insert(0, msg)
-            elif getattr(msg, "tool_calls", None):
-                recent_interaction.insert(0, msg)
-                break
-    return msgs + recent_interaction
+
+# ==========================================
+# Worker 공통 유틸리티
+# ==========================================
+
+def _build_worker_messages(state: AgentState, system_prompt: str) -> list:
+    """Worker LLM에 전달할 메시지 목록을 구성합니다."""
+    msgs = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=(
+            f"Sub-task: {state.get('current_task', '')}\n"
+            f"Past Results: {state.get('past_results', [])}"
+        )),
+    ]
+    # 최근 도구 호출 / 결과 메시지 덧붙이기 (Worker가 이전 도구 결과를 볼 수 있도록)
+    recent = []
+    for msg in reversed(state["messages"]):
+        if isinstance(msg, ToolMessage):
+            recent.insert(0, msg)
+        elif getattr(msg, "tool_calls", None):
+            recent.insert(0, msg)
+            break
+    return msgs + recent
+
+
+def _compress_screenshot(b64_png: str) -> str:
+    """PNG Base64 → JPEG 1280×800 이하 압축 Base64로 변환합니다. (토큰 절약)"""
+    raw = b64lib.b64decode(b64_png)
+    img = Image.open(BytesIO(raw))
+    img.thumbnail((1280, 800), Image.LANCZOS)
+    buf = BytesIO()
+    img.convert("RGB").save(buf, format="JPEG", quality=60)
+    return b64lib.b64encode(buf.getvalue()).decode("utf-8")
+
+
+def _apply_vision_postprocess(msgs: list) -> list:
+    """ToolMessage의 base64_png를 멀티모달(image_url) 포맷으로 변환합니다."""
+    result = []
+    for msg in msgs:
+        if isinstance(msg, ToolMessage) and isinstance(msg.content, str):
+            try:
+                data = json.loads(msg.content)
+                if isinstance(data, dict) and "base64_png" in data:
+                    compressed = _compress_screenshot(data["base64_png"])
+                    msg = ToolMessage(
+                        content=[
+                            {"type": "text", "text": "Screenshot captured. Analyze the image carefully."},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{compressed}"}},
+                        ],
+                        name=msg.name,
+                        tool_call_id=msg.tool_call_id,
+                    )
+            except Exception as e:
+                logger.warning(f"[Vision] 이미지 변환 실패: {e!r}")
+        result.append(msg)
+    return result
+
+
+# ==========================================
+# 3. 공통 Worker 팩토리
+#    Vision/General이 동일한 구조를 공유합니다.
+#    Vision만 postprocess(이미지 압축 변환)를 추가로 적용합니다.
+# ==========================================
+
+def _make_base_worker(llm_with_tools: Runnable, system_prompt: str, worker_label: str, postprocess=None):
+    def worker_node(state: AgentState):
+        msgs = _build_worker_messages(state, system_prompt)
+        if postprocess:
+            msgs = postprocess(msgs)
+
+        # ---- 무한 루프 방지 ----
+        count = state.get("tool_call_count", 0)
+        if count >= MAX_TOOL_CALLS:
+            logger.warning(f"[{worker_label}] 최대 도구 호출 횟수({MAX_TOOL_CALLS}) 초과. 강제 종료.")
+            return {
+                "past_results": state.get("past_results", []) + [
+                    f"[{worker_label}] 최대 도구 호출 횟수를 초과하여 작업이 중단되었습니다."
+                ],
+                "tool_call_count": 0,
+            }
+
+        response = llm_with_tools.invoke(msgs)
+
+        if response.tool_calls:
+            tc = response.tool_calls[0]
+
+            # ---- 위험 도구: interrupt()로 사용자 승인 요청 ----
+            if tc["name"] in DANGEROUS_TOOLS:
+                logger.info(f"[{worker_label}] 위험 도구 감지: {tc['name']} → interrupt() 발동")
+                approved = interrupt({
+                    "tool_name": tc["name"],
+                    "tool_args": tc["args"],
+                    "tool_call_id": tc["id"],
+                })
+                if not approved:
+                    # 거절: ToolMessage로 기록 후 router 복귀
+                    rejection = ToolMessage(
+                        content="사용자가 명령 실행을 거절하였습니다.",
+                        name=tc["name"],
+                        tool_call_id=tc["id"],
+                    )
+                    return {
+                        "messages": [response, rejection],
+                        "past_results": state.get("past_results", []) + [
+                            f"[{worker_label}] '{tc['name']}' 실행이 거절되었습니다."
+                        ],
+                        "tool_call_count": 0,
+                    }
+                # 승인 → Tools 노드로 이동 (route_worker가 tool_calls 유무로 판단)
+
+            # 일반 도구 → ToolNode로 전달
+            return {"messages": [response], "tool_call_count": count + 1}
+
+        # 도구 호출 없음 → 태스크 완료, Master Router로 복귀
+        return {
+            "messages": [response],
+            "past_results": state.get("past_results", []) + [
+                f"[{worker_label}] {response.content}"
+            ],
+            "tool_call_count": 0,
+        }
+    return worker_node
+
 
 # ==========================================
 # 3-1. Vision Worker Node
 # ==========================================
+
 def make_vision_worker(llm_with_tools: Runnable):
-    def vision_worker_node(state: AgentState):
-        from prompts.agents_prompts import VISION_WORKER_PROMPT
-        recent = format_worker_messages(state, VISION_WORKER_PROMPT)
-        
-        # Base64 이미지 멀티모달 변환 + 압축 (토큰 절약)
-        formatted_recent = []
-        for msg in recent:
-            if isinstance(msg, ToolMessage) and isinstance(msg.content, str):
-                try:
-                    data = json.loads(msg.content)
-                    if isinstance(data, dict) and "base64_png" in data:
-                        import base64 as b64lib
-                        from PIL import Image
-                        from io import BytesIO
+    """화면 캡처, OCR, 이미지 분석 전담 Worker."""
+    return _make_base_worker(
+        llm_with_tools,
+        system_prompt=VISION_WORKER_PROMPT,
+        worker_label="vision_worker",
+        postprocess=_apply_vision_postprocess,
+    )
 
-                        # 원본 PNG 디코딩 후 JPEG 1280x800 이하로 압축
-                        raw = b64lib.b64decode(data["base64_png"])
-                        img = Image.open(BytesIO(raw))
-                        img.thumbnail((1280, 800), Image.LANCZOS)
-                        buf = BytesIO()
-                        img.convert("RGB").save(buf, format="JPEG", quality=60)
-                        compressed_b64 = b64lib.b64encode(buf.getvalue()).decode("utf-8")
-
-                        new_content = [
-                            {"type": "text", "text": "Screenshot captured successfully. Analyze the image carefully."},
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{compressed_b64}"}}
-                        ]
-                        msg = ToolMessage(content=new_content, name=msg.name, tool_call_id=msg.tool_call_id)
-                except Exception:
-                    pass
-            formatted_recent.append(msg)
-
-        response = llm_with_tools.invoke(formatted_recent)
-        
-        if response.tool_calls:
-            tc = response.tool_calls[0]
-            if tc["name"] in DANGEROUS_TOOLS:
-                return {"messages": [response], "pending_tool_call": tc, "next_step": "human_approval"}
-            return {"messages": [response], "pending_tool_call": None, "next_step": "tools"}
-            
-        return {"messages": [response], "past_results": [f"Vision output: {response.content}"], "next_step": "router"}
-    return vision_worker_node
 
 # ==========================================
 # 3-2. General Worker Node
 # ==========================================
+
 def make_general_worker(llm_with_tools: Runnable):
-    def general_worker_node(state: AgentState):
-        from prompts.agents_prompts import GENERAL_WORKER_PROMPT
-        recent = format_worker_messages(state, GENERAL_WORKER_PROMPT)
-        response = llm_with_tools.invoke(recent)
-        
-        if response.tool_calls:
-            tc = response.tool_calls[0]
-            if tc["name"] in DANGEROUS_TOOLS:
-                return {"messages": [response], "pending_tool_call": tc, "next_step": "human_approval"}
-            return {"messages": [response], "pending_tool_call": None, "next_step": "tools"}
-            
-        return {"messages": [response], "past_results": [f"General output: {response.content}"], "next_step": "router"}
-    return general_worker_node
+    """파일 시스템, 시스템 모니터링, 웹 검색 전담 Worker."""
+    return _make_base_worker(
+        llm_with_tools,
+        system_prompt=GENERAL_WORKER_PROMPT,
+        worker_label="general_worker",
+    )
+
 
 # ==========================================
 # 5. Aggregator Node
 # ==========================================
+
 def make_aggregator_node(llm: Runnable):
+    """모든 Worker 결과를 취합해 사용자에게 최종 답변을 생성합니다."""
     def aggregator_node(state: AgentState):
-        from prompts.agents_prompts import AGGREGATOR_PROMPT
-
-        # 가장 마지막 HumanMessage를 현재 사용자 요청으로 사용
-        # (messages[0]은 대화가 쌓이면 과거 메시지가 되므로 사용하지 않음)
-        current_request = ""
-        for msg in reversed(state["messages"]):
-            if isinstance(msg, HumanMessage):
-                current_request = msg.content
-                break
-
+        # original_request 우선 사용, 없으면 마지막 HumanMessage에서 참조
+        current_request = state.get("original_request") or next(
+            (msg.content for msg in reversed(state["messages"]) if isinstance(msg, HumanMessage)),
+            ""
+        )
         past = state.get("past_results", [])
-        if past:
-            prompt = f"Current user request: {current_request}\nWorker Results: {past}"
-        else:
-            # Tool 결과가 없는 단순 대화
-            prompt = f"Current user request: {current_request}\n(No tool results — this is a direct conversation, respond naturally.)"
-
-        msgs = [SystemMessage(content=AGGREGATOR_PROMPT), HumanMessage(content=prompt)]
-        response = llm.invoke(msgs)
-        return {"messages": [response], "next_step": "end"}
+        prompt = (
+            f"Current user request: {current_request}\nWorker Results: {past}"
+            if past else
+            f"Current user request: {current_request}\n(No tool results — direct conversation)"
+        )
+        response = llm.invoke([SystemMessage(content=AGGREGATOR_PROMPT), HumanMessage(content=prompt)])
+        return {"messages": [response]}
     return aggregator_node
+
 
 # ==========================================
 # Conditional Edge Parsers
 # ==========================================
+
 def route_planner(state: AgentState) -> Literal["master_router", "aggregator"]:
-    return "master_router" if len(state.get("plan", [])) > 0 else "aggregator"
+    """Plan이 있으면 Router로, 없으면 단순 대화이므로 Aggregator로."""
+    return "master_router" if state.get("plan") else "aggregator"
+
 
 def route_master_router(state: AgentState) -> Literal["vision_worker", "general_worker", "aggregator"]:
-    if not state.get("current_task"):
-        return "aggregator"
-    return state["active_worker"]
+    """Router가 선택한 worker로 이동. active_worker가 없으면 모든 계획 완료."""
+    worker = state.get("active_worker", "")
+    if worker in ("vision_worker", "general_worker"):
+        return worker
+    return "aggregator"
 
-def route_worker(state: AgentState) -> Literal["tools", "human_approval", "master_router"]:
-    step = state.get("next_step")
-    if step == "human_approval": return "human_approval"
-    if step == "tools": return "tools"
+
+def route_worker(state: AgentState) -> Literal["tools", "master_router"]:
+    """
+    마지막 메시지에 tool_calls가 있으면 ToolNode로, 없으면 Master Router로 복귀.
+    next_step 필드 없이 메시지 타입만으로 분기하므로 human_approval 경로가 불필요합니다.
+    (위험 도구는 Worker 내부에서 interrupt()로 처리)
+    """
+    last_msg = state["messages"][-1] if state["messages"] else None
+    if last_msg and getattr(last_msg, "tool_calls", None):
+        return "tools"
     return "master_router"
+
+
+def route_tools(state: AgentState) -> Literal["vision_worker", "general_worker"]:
+    """도구 실행 완료 후 original_request한 Worker로 정확히 복귀."""
+    return state.get("active_worker", "general_worker")
+
 
 def route_entry(state: AgentState) -> Literal["planner", "master_router", "vision_worker", "general_worker"]:
-    """프론트엔드 통신(API)으로 인해 매번 그래프가 재시작 되는 것을 보정하는 진입점 라우터"""
-    if state.get("active_worker"):
-        # 도구가 실행된 후 복귀한 경우
-        last_msg = state["messages"][-1]
-        if isinstance(last_msg, ToolMessage):
-            return state["active_worker"]
-    
-    # plan이 비어있으면 아예 쌩초기 상태
-    if not state.get("plan") and not state.get("past_results"):
-        return "planner"
-    
-    return "master_router"
+    """
+    진입점 라우터.
+    MemorySaver가 이전 상태를 복원하므로, 현재 상태를 보고 어느 노드부터 재개할지 결정합니다.
+
+    우선순위:
+    1. 마지막 메시지가 ToolMessage + active_worker 있음 → Worker로 복귀 (도구 실행 후)
+    2. 진행 중인 plan/active_worker 있음 → master_router로 (계획 진행 중)
+    3. 그 외 → planner (새 대화 시작)
+    """
+    last_msg = state["messages"][-1] if state.get("messages") else None
+    if isinstance(last_msg, ToolMessage) and state.get("active_worker"):
+        return state["active_worker"]
+    if state.get("plan") or state.get("active_worker"):
+        return "master_router"
+    return "planner"
