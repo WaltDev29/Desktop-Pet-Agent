@@ -10,7 +10,12 @@ class AgentState(TypedDict):
     """사용자와 AI 간의 모든 대화 내용이 기록되는 리스트입니다."""
     messages: Annotated[List[AnyMessage], operator.add]
     
-
+    # ============ Orchestrator Fields ============
+    plan: List[str]
+    current_task: str
+    past_results: Annotated[List[str], operator.add]
+    active_worker: str
+    
     # ============ pending_tool_call ============
     """
     AI가 '파일 삭제' 등 위험한 도구를 사용하려 할 때, 
@@ -19,13 +24,9 @@ class AgentState(TypedDict):
     """
     pending_tool_call: dict | None
     
-    
     # ============ next_step ============
     """
     현재 에이전트가 다음에 어떤 행동을 취해야 하는지 방향을 알려줍니다.
-    - "agent": LLM이 생각하고 답변을 생성할 차례입니다.
-    - "tools": LLM이 도구를 써야 한다고 판단했을 때 실행할 차례입니다.
-    - "human_approval": 위험한 작업을 실행하기 전 사용자 승인을 기다리는 멈춤 상태입니다.
-    - "end": 더 이상 할 일이 없어 대화를 종료하고 사용자에게 답변을 보냅니다.
+    프론트엔드 라우터(router.py)에서 human_approval 처리를 위해 사용됩니다.
     """
-    next_step: Literal["agent", "tools", "human_approval", "end"]
+    next_step: Literal["human_approval", "end", ""]

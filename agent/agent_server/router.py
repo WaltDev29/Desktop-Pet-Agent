@@ -9,7 +9,15 @@ from .mcp_client import get_mcp_tools
 # 전역 대화 상태
 # MVP 버전: DB 대신 메모리 딕셔너리로 관리
 # ==========================================
-current_state: dict = {"messages": []}
+current_state: dict = {
+    "messages": [],
+    "plan": [],
+    "current_task": "",
+    "past_results": [],
+    "active_worker": "",
+    "pending_tool_call": None,
+    "next_step": "",
+}
 
 router = APIRouter()
 
@@ -67,7 +75,14 @@ async def chat_endpoint(request: ChatRequest):
                 "tool_call_id": pending["id"],
             })
 
-        # [4] 정상 완료: LLM이 Tool 결과를 읽고 생성한 최종 응답
+        # [4] 정상 완료: 다음 대화 턴을 위해 오케스트레이터 전용 필드 초기화
+        current_state["plan"] = []
+        current_state["current_task"] = ""
+        current_state["past_results"] = []
+        current_state["active_worker"] = ""
+        current_state["pending_tool_call"] = None
+        current_state["next_step"] = ""
+
         last_message = result["messages"][-1]
         return JSONResponse(content={
             "status": "success",

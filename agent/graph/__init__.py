@@ -7,7 +7,18 @@ from langgraph.graph import StateGraph
 from langgraph.prebuilt import ToolNode
 
 from .state import AgentState
-from .nodes import make_agent_node, human_approval_node, route_after_agent
+from .nodes import (
+    make_planner_node,
+    make_master_router_node,
+    make_vision_worker,
+    make_general_worker,
+    make_aggregator_node,
+    human_approval_node,
+    route_planner,
+    route_master_router,
+    route_worker,
+    route_entry
+)
 
 # ==========================================
 # 환경변수 Load
@@ -26,7 +37,6 @@ else:
     BASE_URL = os.getenv("API_BASE_URL")
 
 
-
 async def create_agent():
     # ==========================================
     # 도구 가져오기 (MCP 클라이언트)
@@ -35,7 +45,7 @@ async def create_agent():
     tools = await get_mcp_tools()
 
     # ==========================================
-    # LLM 초기화 및 도구 바인딩
+    # 도구 분리 및 LLM 바인딩
     # ==========================================
     if USE_OPENAI.lower() == 'true':
         llm = ChatOpenAI(model=MODEL, api_key=API_KEY)
@@ -44,45 +54,61 @@ async def create_agent():
             model=MODEL,
             base_url=BASE_URL,
             api_key=API_KEY,
-            default_headers={
-                "User-Agent": "Mozilla/5.0",
-            }
+            default_headers={"User-Agent": "Mozilla/5.0"}
         )
         
-    llm_with_tools = llm.bind_tools(tools)
+    vision_tools = [t for t in tools if "screen" in t.name or "ocr" in t.name or "image" in t.name]
+    general_tools = [t for t in tools if t.name not in [v.name for v in vision_tools]]
 
-
+    vision_llm = llm.bind_tools(vision_tools)
+    general_llm = llm.bind_tools(general_tools)
 
     # ==========================================
     # 그래프 노드 초기화
     # ==========================================
-    agent_node = make_agent_node(llm_with_tools)
+    planner_node = make_planner_node(llm)
+    master_router_node = make_master_router_node(llm)
+    vision_worker_node = make_vision_worker(vision_llm)
+    general_worker_node = make_general_worker(general_llm)
+    aggregator_node = make_aggregator_node(llm)
     tool_node = ToolNode(tools)
-
-
 
     # ==========================================
     # 그래프 조립 
     # ==========================================
     workflow = StateGraph(AgentState)
 
-    # ============ 노드 추가 ============
-    workflow.add_node("agent", agent_node)
+    workflow.add_node("planner", planner_node)
+    workflow.add_node("master_router", master_router_node)
+    workflow.add_node("vision_worker", vision_worker_node)
+    workflow.add_node("general_worker", general_worker_node)
+    workflow.add_node("aggregator", aggregator_node)
     workflow.add_node("tools", tool_node)
     workflow.add_node("human_approval", human_approval_node)
 
-    # ============ 진입점 설정 ============
-    workflow.set_entry_point("agent")
+    # ============ 라우팅 엣지 연결 ============
+    workflow.set_conditional_entry_point(route_entry, {
+        "planner": "planner",
+        "master_router": "master_router",
+        "vision_worker": "vision_worker",
+        "general_worker": "general_worker"
+    })
 
-    # ============ agent -> router 연결 ============
-    '''agent 노드가 끝난 후 route_after_agent 함수의 결과에 따라 갈림길 생성'''
-    workflow.add_conditional_edges("agent", route_after_agent)
+    workflow.add_conditional_edges("planner", route_planner, {"master_router": "master_router", "aggregator": "aggregator"})
+    workflow.add_conditional_edges("master_router", route_master_router, {"vision_worker": "vision_worker", "general_worker": "general_worker", "aggregator": "aggregator"})
+    
+    workflow.add_conditional_edges("vision_worker", route_worker, {"tools": "tools", "human_approval": "human_approval", "master_router": "master_router"})
+    workflow.add_conditional_edges("general_worker", route_worker, {"tools": "tools", "human_approval": "human_approval", "master_router": "master_router"})
+    
+    # 도구 완료 시 어떤 워커가 요청했는지 복귀
+    def route_tools(state: AgentState):
+        return state["active_worker"]
+        
+    workflow.add_conditional_edges("tools", route_tools, {"vision_worker": "vision_worker", "general_worker": "general_worker"})
+    
+    # 대기, 종료 처리
+    workflow.add_edge("human_approval", "__end__")
+    workflow.add_edge("aggregator", "__end__")
 
-    # ============ tools -> agent 연결 ============
-    '''도구 노드(tools)가 일을 마치면, 그 결과값을 들고 다시 에이전트(agent)에게 돌아가서 다음 답변을 생각하게 합니다.'''
-    workflow.add_edge("tools", "agent")
-
-    # ============ 그래프 컴파일 ============
     app_graph = workflow.compile()
-
     return app_graph
