@@ -102,7 +102,10 @@ def create_app() -> FastAPI:
             async with httpx.AsyncClient() as client:
                 agent_resp = await client.post(
                     f"{AGENT_SERVER_URL}/approve",
-                    json={"approve": request.approve},
+                    json={
+                        "approve": request.approve,
+                        "tool_call_id": request.tool_call_id
+                    },
                     cookies={"session_id": session_id},  # Agent Server에 session_id 명시 전달
                     timeout=180.0,
                 )
