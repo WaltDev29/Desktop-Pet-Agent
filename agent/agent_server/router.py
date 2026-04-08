@@ -1,15 +1,33 @@
-from fastapi import APIRouter
+"""
+agent/agent_server/router.py
+
+FastAPI 라우터 - 에이전트와 Web UI 간의 인터페이스를 제공합니다.
+
+세션 관리:
+  - session_id: HttpOnly 쿠키로 자동 발급/관리 (Web UI 코드 변경 불필요)
+  - thread_id: f"{user_id}:{session_id}" 형태로 구성
+      - 지금(MVP): user_id = "default" 고정
+      - 나중(멀티유저): JWT 토큰에서 user_id를 추출하여 교체
+
+사용자 승인 흐름 (LangGraph interrupt 방식):
+  [Worker 내부] interrupt() 발동
+    → ainvoke가 즉시 반환, result에 "__interrupt__" 키 포함
+    → API가 프론트엔드에 approval_required 반환
+  [사용자 승인/거절]
+    → /approve API에서 Command(resume=True/False) 전달
+    → 그래프가 interrupt() 바로 다음부터 재개
+"""
+
+import uuid
+import logging
+
+from fastapi import APIRouter, Cookie, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from langchain_core.messages import HumanMessage
+from langgraph.types import Command
 
-from langchain_core.messages import HumanMessage, ToolMessage
-from .mcp_client import get_mcp_tools
-
-# ==========================================
-# 전역 대화 상태
-# MVP 버전: DB 대신 메모리 딕셔너리로 관리
-# ==========================================
-current_state: dict = {"messages": []}
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -18,146 +36,159 @@ class ChatRequest(BaseModel):
     message: str
 
 class ApprovalRequest(BaseModel):
-    approve: bool          # True: 허용, False: 거절
-    tool_call_id: str      # 승인/거절 대상 Tool의 고유 ID
+    approve: bool   # True: 허용 / False: 거절
 
 
-async def get_agent():
-    """순환 임포트 방지를 위해 agent를 지연 import합니다."""
-    from graph import create_agent
-    return await create_agent()
-
-
-# Agent 인스턴스 (서버 시작 시 1회 초기화)
+# ==========================================
+# 에이전트 지연 초기화 (순환 임포트 방지)
+# ==========================================
 _agent = None
 
 async def _get_or_create_agent():
     global _agent
     if _agent is None:
-        _agent = await get_agent()
+        from graph import create_agent
+        _agent = await create_agent()
     return _agent
 
 
-@router.post("/chat")
-async def chat_endpoint(request: ChatRequest):
+def _make_config(session_id: str) -> dict:
     """
-    사용자 메시지를 받아 LangGraph 에이전트를 실행합니다.
-    - 일반 Tool(CPU/메모리 등): Tool Server 실행 결과를 받아 LLM이 최종 응답 생성
-    - 위험 Tool(파일 삭제 등): human_approval 상태로 반환, Web UI에서 승인 모달 표시
-    """
-    global current_state
+    LangGraph 실행 설정을 생성합니다.
+    thread_id = "{user_id}:{session_id}" 형태로 구성합니다.
 
-    # [1] 사용자 메시지 상태에 추가
-    current_state["messages"].append(HumanMessage(content=request.message))
+    나중에 로그인 기능 도입 시, user_id를 JWT 토큰에서 추출하여 교체하세요.
+    예: user_id = get_current_user(request).id
+    """
+    user_id = "default"  # MVP: 단일 사용자 고정
+    return {"configurable": {"thread_id": f"{user_id}:{session_id}"}}
+
+
+def _initial_state(message: str) -> dict:
+    """새 대화 턴 시작 시 전달할 초기 State를 반환합니다."""
+    return {
+        "messages":        [HumanMessage(content=message)],
+        "original_request": "",
+        "plan":            [],
+        "current_task":    "",
+        "past_results":    [],
+        "active_worker":   "",
+        "tool_call_count": 0,
+    }
+
+
+# ==========================================
+# /chat
+# ==========================================
+
+@router.post("/chat")
+async def chat_endpoint(
+    request:    ChatRequest,
+    response:   Response,
+    session_id: str = Cookie(default=None),
+):
+    """
+    사용자 메시지를 받아 에이전트를 실행합니다.
+
+    - 일반 요청: 에이전트가 계획/실행/취합 후 최종 응답 반환
+    - 위험 도구 감지: interrupt()로 일시정지, approval_required 상태 반환
+    """
+    # session_id 없으면 신규 발급 (HttpOnly 쿠키로 자동 관리)
+    if not session_id:
+        session_id = str(uuid.uuid4())
+
+    # 쿠키 갱신 (응답마다 재세팅 → 만료 방지)
+    response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
+
+    agent  = await _get_or_create_agent()
+    config = _make_config(session_id)
+    state  = _initial_state(request.message)
 
     try:
-        agent = await _get_or_create_agent()
-        # [2] LangGraph 에이전트 실행
-        #     - 일반 Tool: ToolNode → proxy → Tool Server HTTP 호출 → 결과 반환
-        #     - 위험 Tool: human_approval_node에서 그래프 정지
-        result = await agent.ainvoke(current_state)
-        current_state = result
+        result = await agent.ainvoke(state, config=config)
 
-        # [3] 위험 Tool 승인 대기 상태인 경우
-        if result.get("next_step") == "human_approval":
-            pending = result["pending_tool_call"]
+        # ---- 위험 도구로 인한 일시정지 ----
+        if "__interrupt__" in result:
+            interrupt_data = result["__interrupt__"][0].value
+            logger.info(f"[Chat] interrupt 발동: {interrupt_data['tool_name']}")
             return JSONResponse(content={
-                "status": "approval_required",
-                "message": f"위험한 작업({pending['name']})이 감지되었습니다. 승인하시겠습니까?\n내용: {pending['args']}",
-                "tool_call_id": pending["id"],
+                "status":       "approval_required",
+                "message":      (
+                    f"⚠️ 위험한 작업 감지\n"
+                    f"도구: {interrupt_data['tool_name']}\n"
+                    f"내용: {interrupt_data['tool_args']}\n\n"
+                    f"실행을 허용하시겠습니까?"
+                ),
+                "tool_call_id": interrupt_data["tool_call_id"],
             })
 
-        # [4] 정상 완료: LLM이 Tool 결과를 읽고 생성한 최종 응답
-        last_message = result["messages"][-1]
-        return JSONResponse(content={
-            "status": "success",
-            "message": last_message.content,
-        })
+        last_msg = result["messages"][-1]
+        return JSONResponse(content={"status": "success", "message": last_msg.content})
 
     except Exception as e:
         import traceback
-        trace_str = traceback.format_exc()
+        trace = traceback.format_exc()
+        logger.error(f"[Chat] 에이전트 실행 오류:\n{trace}")
         return JSONResponse(
-            content={"status": "error", "message": f"에이전트 실행 실패: {str(e)}\n{trace_str}"},
+            content={"status": "error", "message": f"에이전트 실행 실패: {e}\n{trace}"},
             status_code=500,
         )
 
 
+# ==========================================
+# /approve
+# ==========================================
+
 @router.post("/approve")
-async def approve_endpoint(request: ApprovalRequest):
+async def approve_endpoint(
+    request:    ApprovalRequest,
+    response:   Response,
+    session_id: str = Cookie(default=None),
+):
     """
-    Web UI의 승인/거절 결과를 받아 처리합니다.
-    - 허용: Tool Server에 approved=True로 HTTP 요청 → 결과를 ToolMessage로 상태에 추가 → 에이전트 재개
-    - 거절: 거절 메시지를 ToolMessage로 상태에 추가 → 에이전트 재개
+    Web UI의 승인/거절 결과를 받아 중단된 에이전트를 재개합니다.
+
+    LangGraph의 Command(resume=bool)를 사용해 interrupt() 위치에서 정확히 재개합니다.
+    - approve=True  → Worker가 도구를 실행하고 계속 진행
+    - approve=False → Worker가 거절 메시지를 기록하고 다음 계획으로 복귀
     """
-    global current_state
-    agent = await _get_or_create_agent()
+    if not session_id:
+        return JSONResponse(
+            content={"status": "error", "message": "세션이 없습니다. 새로 대화를 시작해주세요."},
+            status_code=400,
+        )
 
-    if not current_state.get("pending_tool_call"):
-        return JSONResponse(content={"status": "error", "message": "대기 중인 Tool 호출이 없습니다."})
+    response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
 
-    last_message = current_state["messages"][-1]
-    if not hasattr(last_message, "tool_calls") or not last_message.tool_calls:
-        return JSONResponse(content={"status": "error", "message": "마지막 메시지에 tool_calls가 없습니다."})
+    agent  = await _get_or_create_agent()
+    config = _make_config(session_id)
 
-    # [허용] 클릭: Tool Server에 직접 권한을 획득하여 툴 실행
-    if request.approve:
-        try:
-            tools = await get_mcp_tools()
-            tool_map = {t.name: t for t in tools}
+    try:
+        # Command(resume=True/False) → interrupt() 위치에서 재개
+        result = await agent.ainvoke(Command(resume=request.approve), config=config)
 
-            for tc in last_message.tool_calls:
-                tool_name = tc["name"]
-                tool_args = tc["args"]
-                tool_call_id = tc["id"]
+        # 재개 후 또 다른 위험 도구가 등장한 경우
+        if "__interrupt__" in result:
+            interrupt_data = result["__interrupt__"][0].value
+            return JSONResponse(content={
+                "status":       "approval_required",
+                "message":      (
+                    f"⚠️ 또 다른 위험 작업이 감지되었습니다.\n"
+                    f"도구: {interrupt_data['tool_name']}\n"
+                    f"내용: {interrupt_data['tool_args']}"
+                ),
+                "tool_call_id": interrupt_data["tool_call_id"],
+            })
 
-                # MCP 환경에서 안전하게 우회된 구조를 통해 직접 호출
-                if tool_name in tool_map:
-                    tool_obj = tool_map[tool_name]
-                    tool_result = await tool_obj.ainvoke(tool_args)
-                    result_content = str(tool_result)
-                else:
-                    result_content = f"에러: {tool_name} 도구를 찾을 수 없습니다."
+        last_msg = result["messages"][-1]
+        status   = "success" if request.approve else "rejected"
+        return JSONResponse(content={"status": status, "message": last_msg.content})
 
-                # LLM이 Tool 결과를 읽을 수 있도록 ToolMessage로 상태에 추가
-                tool_message = ToolMessage(
-                    content=result_content,
-                    name=tool_name,
-                    tool_call_id=tool_call_id,
-                )
-                current_state["messages"].append(tool_message)
-
-            current_state["pending_tool_call"] = None
-
-            result = await agent.ainvoke(current_state)
-            current_state = result
-            last_msg = result["messages"][-1]
-            return JSONResponse(content={"status": "success", "message": last_msg.content})
-        except Exception as e:
-            return JSONResponse(
-                content={"status": "error", "message": f"승인 후 툴 실행 및 에이전트 재개 오류: {str(e)}"},
-                status_code=500,
-            )
-
-    # [거절] 클릭: LLM에게 거절 사실을 ToolMessage로 전달
-    else:
-        for tc in last_message.tool_calls:
-            tool_message = ToolMessage(
-                content="사용자가 명령 실행을 거절하였습니다.",
-                name=tc["name"],
-                tool_call_id=tc["id"],
-            )
-            current_state["messages"].append(tool_message)
-
-        current_state["pending_tool_call"] = None
-
-        try:
-            result = await agent.ainvoke(current_state)
-            current_state = result
-            last_msg = result["messages"][-1]
-            return JSONResponse(content={"status": "rejected", "message": last_msg.content})
-        except Exception as e:
-            return JSONResponse(
-                content={"status": "error", "message": f"거절 후 에이전트 재개 오류: {str(e)}"},
-                status_code=500,
-            )
+    except Exception as e:
+        import traceback
+        trace = traceback.format_exc()
+        logger.error(f"[Approve] 재개 오류:\n{trace}")
+        return JSONResponse(
+            content={"status": "error", "message": f"재개 중 오류 발생: {e}"},
+            status_code=500,
+        )

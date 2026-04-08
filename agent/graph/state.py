@@ -1,31 +1,31 @@
-from typing import TypedDict, Annotated, List, Literal
+from typing import TypedDict, Annotated, List
 from langchain_core.messages import AnyMessage
 import operator
 
 
 class AgentState(TypedDict):
-    """LangGraph 에이전트의 상태를 정의합니다."""
-    
-    # ============ messages ============
-    """사용자와 AI 간의 모든 대화 내용이 기록되는 리스트입니다."""
-    messages: Annotated[List[AnyMessage], operator.add]
-    
+    """LangGraph 에이전트의 전역 상태를 정의합니다."""
 
-    # ============ pending_tool_call ============
-    """
-    AI가 '파일 삭제' 등 위험한 도구를 사용하려 할 때, 
-    바로 실행하지 않고 사용자 승인을 받기 위해 
-    도구의 정보(이름, 매개변수)를 임시로 저장해두는 공간입니다.
-    """
-    pending_tool_call: dict | None
-    
-    
-    # ============ next_step ============
-    """
-    현재 에이전트가 다음에 어떤 행동을 취해야 하는지 방향을 알려줍니다.
-    - "agent": LLM이 생각하고 답변을 생성할 차례입니다.
-    - "tools": LLM이 도구를 써야 한다고 판단했을 때 실행할 차례입니다.
-    - "human_approval": 위험한 작업을 실행하기 전 사용자 승인을 기다리는 멈춤 상태입니다.
-    - "end": 더 이상 할 일이 없어 대화를 종료하고 사용자에게 답변을 보냅니다.
-    """
-    next_step: Literal["agent", "tools", "human_approval", "end"]
+    # ============ messages ============
+    # operator.add: 대화 기록이 매 턴마다 누적됩니다.
+    messages: Annotated[List[AnyMessage], operator.add]
+
+    # ============ original_request ============
+    # Planner가 저장하는 최초 사용자 요청.
+    # Aggregator가 항상 올바른 원본 요청을 참조하기 위해 사용합니다.
+    original_request: str
+
+    # ============ Orchestrator Fields ============
+    # plan: Router가 태스크를 하나씩 빼서 줄여나갑니다. (단순 할당, 덮어쓰기)
+    plan: List[str]
+    # current_task: Router가 현재 Worker에게 할당한 단일 태스크
+    current_task: str
+    # past_results: 각 Worker가 태스크 완료 후 누적하는 중간 결과물 (단순 할당, Worker가 직접 누적)
+    past_results: List[str]
+    # active_worker: 현재 활성 Worker 이름 (도구 완료 후 복귀 경로로 사용)
+    active_worker: str
+
+    # ============ tool_call_count ============
+    # Worker의 무한 도구 호출 루프를 방지하기 위한 카운터.
+    # Router가 새 태스크를 배정할 때마다 0으로 초기화합니다.
+    tool_call_count: int

@@ -1,4 +1,5 @@
 import os
+import logging
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -7,27 +8,47 @@ from langgraph.graph import StateGraph
 from langgraph.prebuilt import ToolNode
 
 from .state import AgentState
-from .nodes import make_agent_node, human_approval_node, route_after_agent
+from .checkpointer import get_checkpointer
+from .nodes import (
+    make_planner_node,
+    make_master_router_node,
+    make_vision_worker,
+    make_general_worker,
+    make_aggregator_node,
+    route_planner,
+    route_master_router,
+    route_worker,
+    route_tools,
+    route_entry,
+)
+
+logger = logging.getLogger(__name__)
 
 # ==========================================
 # 환경변수 Load
 # ==========================================
 BASE_DIR = Path(__file__).resolve().parent.parent
-load_dotenv(BASE_DIR/".env")
+load_dotenv(BASE_DIR / ".env")
 
-USE_OPENAI = os.getenv("USE_OPENAI")
+# 기본값 추가: .env에 USE_OPENAI가 없어도 NoneType 에러 방지
+USE_OPENAI = os.getenv("USE_OPENAI", "false")
+MODEL     = os.getenv("OPENAI_MODEL") if USE_OPENAI.lower() == "true" else os.getenv("API_MODEL")
+API_KEY   = os.getenv("API_KEY", "")  if USE_OPENAI.lower() == "true" else ""
+BASE_URL  = os.getenv("API_BASE_URL", "")
 
-if USE_OPENAI.lower() == 'true':
-    MODEL = os.getenv("OPENAI_MODEL")
-    API_KEY = os.getenv("API_KEY")
-else:
-    API_KEY = ""
-    MODEL = os.getenv("API_MODEL")
-    BASE_URL = os.getenv("API_BASE_URL")
-
+# ==========================================
+# 그래프 싱글톤
+# 서버 시작 후 최초 1회만 생성하고 이후 재사용합니다.
+# MemorySaver가 thread_id 별로 상태를 내부적으로 관리합니다.
+# ==========================================
+_agent = None
 
 
 async def create_agent():
+    global _agent
+    if _agent is not None:
+        return _agent
+
     # ==========================================
     # 도구 가져오기 (MCP 클라이언트)
     # ==========================================
@@ -35,54 +56,69 @@ async def create_agent():
     tools = await get_mcp_tools()
 
     # ==========================================
-    # LLM 초기화 및 도구 바인딩
+    # LLM 초기화 및 도구 분리 바인딩
     # ==========================================
-    if USE_OPENAI.lower() == 'true':
+    if USE_OPENAI.lower() == "true":
         llm = ChatOpenAI(model=MODEL, api_key=API_KEY)
-    else: 
+    else:
         llm = ChatOpenAI(
             model=MODEL,
             base_url=BASE_URL,
-            api_key=API_KEY,
-            default_headers={
-                "User-Agent": "Mozilla/5.0",
-            }
+            api_key=API_KEY or "x",  # 로컬 서버는 API_KEY가 빈 문자열이면 에러 나는 경우 대비
+            default_headers={"User-Agent": "Mozilla/5.0"},
         )
-        
-    llm_with_tools = llm.bind_tools(tools)
 
+    vision_tool_names = {"screen", "ocr", "image"}
+    vision_tools  = [t for t in tools if any(k in t.name for k in vision_tool_names)]
+    general_tools = [t for t in tools if t.name not in {v.name for v in vision_tools}]
 
+    vision_llm  = llm.bind_tools(vision_tools)
+    general_llm = llm.bind_tools(general_tools)
 
-    # ==========================================
-    # 그래프 노드 초기화
-    # ==========================================
-    agent_node = make_agent_node(llm_with_tools)
-    tool_node = ToolNode(tools)
-
-
+    logger.info(f"[Agent] Vision tools: {[t.name for t in vision_tools]}")
+    logger.info(f"[Agent] General tools: {[t.name for t in general_tools]}")
 
     # ==========================================
-    # 그래프 조립 
+    # 노드 초기화
+    # ==========================================
+    planner_node    = make_planner_node(llm)
+    router_node     = make_master_router_node(llm)
+    vision_node     = make_vision_worker(vision_llm)
+    general_node    = make_general_worker(general_llm)
+    aggregator_node = make_aggregator_node(llm)
+    tool_node       = ToolNode(tools)
+
+    # ==========================================
+    # 그래프 조립
     # ==========================================
     workflow = StateGraph(AgentState)
 
-    # ============ 노드 추가 ============
-    workflow.add_node("agent", agent_node)
-    workflow.add_node("tools", tool_node)
-    workflow.add_node("human_approval", human_approval_node)
+    workflow.add_node("planner",        planner_node)
+    workflow.add_node("master_router",  router_node)
+    workflow.add_node("vision_worker",  vision_node)
+    workflow.add_node("general_worker", general_node)
+    workflow.add_node("aggregator",     aggregator_node)
+    workflow.add_node("tools",          tool_node)
 
-    # ============ 진입점 설정 ============
-    workflow.set_entry_point("agent")
+    # ---- 진입점 ----
+    workflow.set_conditional_entry_point(route_entry, {
+        "planner":        "planner",
+        "master_router":  "master_router",
+        "vision_worker":  "vision_worker",
+        "general_worker": "general_worker",
+    })
 
-    # ============ agent -> router 연결 ============
-    '''agent 노드가 끝난 후 route_after_agent 함수의 결과에 따라 갈림길 생성'''
-    workflow.add_conditional_edges("agent", route_after_agent)
+    # ---- 노드간 엣지 ----
+    workflow.add_conditional_edges("planner",       route_planner,       {"master_router": "master_router", "aggregator": "aggregator"})
+    workflow.add_conditional_edges("master_router", route_master_router, {"vision_worker": "vision_worker", "general_worker": "general_worker", "aggregator": "aggregator"})
+    workflow.add_conditional_edges("vision_worker",  route_worker, {"tools": "tools", "master_router": "master_router"})
+    workflow.add_conditional_edges("general_worker", route_worker, {"tools": "tools", "master_router": "master_router"})
+    workflow.add_conditional_edges("tools",          route_tools,  {"vision_worker": "vision_worker", "general_worker": "general_worker"})
+    workflow.add_edge("aggregator", "__end__")
 
-    # ============ tools -> agent 연결 ============
-    '''도구 노드(tools)가 일을 마치면, 그 결과값을 들고 다시 에이전트(agent)에게 돌아가서 다음 답변을 생각하게 합니다.'''
-    workflow.add_edge("tools", "agent")
-
-    # ============ 그래프 컴파일 ============
-    app_graph = workflow.compile()
-
-    return app_graph
+    # ---- 컴파일: 체크포인터 주입 ----
+    # MemorySaver → thread_id별 상태를 메모리에 보존
+    # 나중에 .env에 DATABASE_URL 추가만 하면 PostgresSaver로 자동 전환됩니다.
+    _agent = workflow.compile(checkpointer=get_checkpointer())
+    logger.info("[Agent] 그래프 컴파일 완료")
+    return _agent
