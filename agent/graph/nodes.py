@@ -73,11 +73,23 @@ def make_planner_node(llm: Runnable):
             content = response.content
             if "{" in content and "}" in content:
                 start, end = content.find("{"), content.rfind("}") + 1
-                data = json.loads(content[start:end])
+                raw = content[start:end]
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    # LLM이 Windows 경로(D:\foo)를 JSON 이스케이프 없이 출력한 경우
+                    # 비이스케이프된 백슬래시만 골라서 \\로 치환 후 재시도
+                    import re
+                    fixed = re.sub(
+                        r'\\(?!["\\bfnrtu])',  # 유효한 JSON 이스케이프가 아닌 \ 만 치환
+                        r'\\\\',
+                        raw,
+                    )
+                    data = json.loads(fixed)
                 if "plan" in data and isinstance(data["plan"], list):
                     plan = data["plan"]
         except (json.JSONDecodeError, ValueError) as e:
-            # JSON 파싱 실패 → 빈 plan으로 Aggregator 직접 대화 처리
+            # 두 번 시도 모두 실패 → 단순 대화로 처리
             logger.warning(f"[Planner] JSON 파싱 실패, 단순 대화로 처리합니다. 원인: {e!r}")
 
         return {
@@ -206,34 +218,46 @@ def _make_base_worker(llm_with_tools: Runnable, system_prompt: str, worker_label
         response = llm_with_tools.invoke(msgs)
 
         if response.tool_calls:
-            tc = response.tool_calls[0]
+            # ---- 위험 도구 전수 스캔 ----
+            # LLM이 한 번에 여러 tool_call을 반환할 수 있으므로 [0]만 보면 안 됩니다.
+            dangerous_calls = [
+                tc for tc in response.tool_calls if tc["name"] in DANGEROUS_TOOLS
+            ]
 
-            # ---- 위험 도구: interrupt()로 사용자 승인 요청 ----
-            if tc["name"] in DANGEROUS_TOOLS:
-                logger.info(f"[{worker_label}] 위험 도구 감지: {tc['name']} → interrupt() 발동")
+            if dangerous_calls:
+                logger.info(
+                    f"[{worker_label}] 위험 도구 감지 {len(dangerous_calls)}개 → interrupt() 발동"
+                )
+                # 위험 도구 전체 목록을 한 번에 사용자에게 표시
                 approved = interrupt({
-                    "tool_name": tc["name"],
-                    "tool_args": tc["args"],
-                    "tool_call_id": tc["id"],
+                    "tool_name":  dangerous_calls[0]["name"],          # UI 표시용 대표 이름
+                    "tool_args":  [tc["args"] for tc in dangerous_calls],  # 전체 인자 목록
+                    "tool_call_id": dangerous_calls[0]["id"],
+                    "total_count": len(dangerous_calls),               # 총 개수 표시
                 })
                 if not approved:
-                    # 거절: ToolMessage로 기록 후 router 복귀
-                    rejection = ToolMessage(
-                        content="사용자가 명령 실행을 거절하였습니다.",
-                        name=tc["name"],
-                        tool_call_id=tc["id"],
-                    )
+                    # 거절: 위험 도구 전체에 대해 ToolMessage 생성 후 router 복귀
+                    rejections = [
+                        ToolMessage(
+                            content="사용자가 명령 실행을 거절하였습니다.",
+                            name=tc["name"],
+                            tool_call_id=tc["id"],
+                        )
+                        for tc in dangerous_calls
+                    ]
                     return {
-                        "messages": [response, rejection],
+                        "messages": [response] + rejections,
                         "past_results": state.get("past_results", []) + [
-                            f"[{worker_label}] '{tc['name']}' 실행이 거절되었습니다."
+                            f"[{worker_label}] '{dangerous_calls[0]['name']}' 외 "
+                            f"{len(dangerous_calls)}건 실행이 거절되었습니다."
                         ],
                         "tool_call_count": 0,
                     }
                 # 승인 → Tools 노드로 이동 (route_worker가 tool_calls 유무로 판단)
 
-            # 일반 도구 → ToolNode로 전달
+            # 일반 도구 (또는 승인된 위험 도구) → ToolNode로 전달
             return {"messages": [response], "tool_call_count": count + 1}
+
 
         # 도구 호출 없음 → 태스크 완료, Master Router로 복귀
         return {

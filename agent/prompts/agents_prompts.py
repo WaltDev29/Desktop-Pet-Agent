@@ -6,12 +6,14 @@ If the user's request is a simple conversational greeting or generic question th
 If the request requires system tools, file operations, web searches, or screen analysis, break it down into explicit logical steps.
 
 Important rules:
-- If the user asks to "save a screenshot" to a specific path, make the plan step explicitly mention the FULL save path (e.g., "Take screenshot and save to D:\\screenshot.png").
 - Be specific. Include file paths, directory names, or key parameters in the plan steps.
+- CRITICAL JSON RULE: When writing file paths inside JSON strings, ALWAYS use forward slashes (/) instead of backslashes.
+  Correct:   {"plan": ["Save recipe to D:/recipe.txt"]}
+  Incorrect: {"plan": ["Save recipe to D:\\recipe.txt"]}
 
 Return ONLY a valid JSON object with the key "plan", containing a list of strings representing each step.
 Example:
-{"plan": ["1. Use screenshot tool to capture the screen and save it to D:\\screenshot.png"]}
+{"plan": ["1. Search for the recipe using web search tool", "2. Write the result to D:/recipe.txt using file write tool"]}
 """
 
 # Vision Worker Prompt
