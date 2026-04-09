@@ -34,9 +34,11 @@ router = APIRouter()
 
 class ChatRequest(BaseModel):
     message: str
+    session_id: str | None = None  # 쿠키가 유실됐을 때를 대비한 이중 안전장치
 
 class ApprovalRequest(BaseModel):
-    approve: bool   # True: 허용 / False: 거절
+    approve: bool                  # True: 허용 / False: 거절
+    session_id: str | None = None  # 쿠키가 유실됐을 때를 대비한 이중 안전장치
 
 
 # ==========================================
@@ -93,9 +95,10 @@ async def chat_endpoint(
     - 일반 요청: 에이전트가 계획/실행/취합 후 최종 응답 반환
     - 위험 도구 감지: interrupt()로 일시정지, approval_required 상태 반환
     """
-    # session_id 없으면 신규 발급 (HttpOnly 쿠키로 자동 관리)
-    if not session_id:
-        session_id = str(uuid.uuid4())
+    # 세션 ID 우선순위: 쿠키 → 요청 바디 → 신규 발급
+    # (httpx 쿠키 중계 과정에서 쿠키가 유실되더라도 바디의 session_id로 보완)
+    session_id = session_id or request.session_id or str(uuid.uuid4())
+    logger.info(f"[Chat] thread_id=default:{session_id[:8]}...")
 
     # 쿠키 갱신 (응답마다 재세팅 → 만료 방지)
     response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
@@ -123,7 +126,7 @@ async def chat_endpoint(
             })
 
         last_msg = result["messages"][-1]
-        return JSONResponse(content={"status": "success", "message": last_msg.content})
+        return JSONResponse(content={"status": "success", "message": last_msg.content, "session_id": session_id})
 
     except Exception as e:
         import traceback
@@ -152,11 +155,14 @@ async def approve_endpoint(
     - approve=True  → Worker가 도구를 실행하고 계속 진행
     - approve=False → Worker가 거절 메시지를 기록하고 다음 계획으로 복귀
     """
+    # 세션 ID 우선순위: 쿠키 → 요청 바디 → 에러
+    session_id = session_id or request.session_id
     if not session_id:
         return JSONResponse(
             content={"status": "error", "message": "세션이 없습니다. 새로 대화를 시작해주세요."},
             status_code=400,
         )
+    logger.info(f"[Approve] thread_id=default:{session_id[:8]}...")
 
     response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
 
