@@ -44,27 +44,7 @@ conda activate pet-ui
 
 ### 3. 환경 변수 설정 (`.env`)
 
-`agent/` 디렉토리에 `.env` 파일을 생성하고 아래 내용을 입력합니다. (사용자 환경에 맞게 수정)
-
-```env
-# ============ LLM 설정 ============
-USE_OPENAI= (True | False)
-OPENAI_MODEL= (ex. gpt-4o-mini)
-API_KEY= (your openai api key)
-
-# Local LLM 사용 시 (선택 사항)
-# API_MODEL= (your local model name)    
-# API_BASE_URL= (http://your_local_api_endpoint/v1)
-
-# ============ 서버 URL 설정 ============
-# Agent Server와 통신할 URL (기본값)
-AGENT_SERVER_URL=http://localhost:8001
-TOOL_SERVER_URL=http://localhost:8002
-
-# ============ MCP 설정 (선택 사항) ============
-MCP_TRANSPORT=stdio
-MCP_PATH= (path to your python executable)
-```
+`agent/` 디렉토리에 `.env.example` 파일 이름을 `env`로 수정하고, 사용자 환경에 맞게 수정합니다.
 
 <br>
 
