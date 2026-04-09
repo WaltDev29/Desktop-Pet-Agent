@@ -70,6 +70,7 @@ class ChatWindow(QWidget):
         self.signaler.error_occurred.connect(self.on_error_occurred)
 
         self.pending_tool_call_id = None
+        self.session_id = None  # 서버로부터 받은 세션 ID를 저장합니다 (쿠키 보조 수단)
         
         self.web_ui_url = "http://localhost:8000"
         self.session = requests.Session()
@@ -90,6 +91,10 @@ class ChatWindow(QWidget):
         try:
             # 입력이 문자열(채팅)이면 dict로 변환, 이미 dict(승인)면 그대로 사용
             json_data = {"message": data_input} if isinstance(data_input, str) else data_input
+            
+            # 저장된 session_id가 있으면 바디에 포함 (쿠키 유실 대비 이중 안전장치)
+            if self.session_id:
+                json_data["session_id"] = self.session_id
             
             response = self.session.post(
                 f"{self.web_ui_url}{endpoint}",
@@ -117,6 +122,10 @@ class ChatWindow(QWidget):
         
         reply = data.get("response") or data.get("message") or str(data)
         self.chat_history.append(f"펫: {reply}")
+        
+        # [중요] 서버가 응답한 session_id를 저장합니다 (쿠키 기반 세션의 보조 수단)
+        if data.get("session_id"):
+            self.session_id = data["session_id"]
         
         # [중요] 서버가 보낸 tool_call_id를 추출해서 저장해둡니다.
         self.pending_tool_call_id = data.get("tool_call_id")

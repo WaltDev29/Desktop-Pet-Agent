@@ -53,8 +53,11 @@ def create_app() -> FastAPI:
             async with httpx.AsyncClient() as client:
                 agent_resp = await client.post(
                     f"{AGENT_SERVER_URL}/chat",
-                    json={"message": request.message},
-                    cookies={"session_id": session_id},  # Agent Server에 session_id 명시 전달
+                    json={
+                        "message": request.message,
+                        "session_id": session_id,  # 쿠키 유실 대비 이중 안전장치
+                    },
+                    cookies={"session_id": session_id},
                     timeout=180.0,
                 )
 
@@ -104,9 +107,10 @@ def create_app() -> FastAPI:
                     f"{AGENT_SERVER_URL}/approve",
                     json={
                         "approve": request.approve,
-                        "tool_call_id": request.tool_call_id
+                        "tool_call_id": request.tool_call_id,
+                        "session_id": session_id,  # 쿠키 유실 대비 이중 안전장치
                     },
-                    cookies={"session_id": session_id},  # Agent Server에 session_id 명시 전달
+                    cookies={"session_id": session_id},
                     timeout=180.0,
                 )
 
