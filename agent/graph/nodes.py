@@ -302,20 +302,65 @@ def make_general_worker(llm_with_tools: Runnable):
 # ==========================================
 
 def make_aggregator_node(llm: Runnable):
-    """모든 Worker 결과를 취합해 사용자에게 최종 답변을 생성합니다."""
+    """모든 Worker 결과를 취합해 사용자에게 최종 답변을 생성합니다.
+
+    [대화 기억 구현 방식]
+    state["messages"]에서 순수 대화 메시지(HumanMessage + Aggregator의 AIMessage)만 추출해
+    LLM에 히스토리로 제공합니다. 이를 통해 이전 대화 내용을 기억하면서 현재 요청에 답변합니다.
+
+    Worker 내부 메시지(ToolMessage, tool_calls 포함 AIMessage)는 대화 맥락과 무관하므로 제외합니다.
+    """
     def aggregator_node(state: AgentState):
-        # original_request 우선 사용, 없으면 마지막 HumanMessage에서 참조
+        from langchain_core.messages import AIMessage
+
         current_request = state.get("original_request") or next(
             (msg.content for msg in reversed(state["messages"]) if isinstance(msg, HumanMessage)),
             ""
         )
         past = state.get("past_results", [])
-        prompt = (
-            f"Current user request: {current_request}\nWorker Results: {past}"
-            if past else
-            f"Current user request: {current_request}\n(No tool results — direct conversation)"
-        )
-        response = llm.invoke([SystemMessage(content=AGGREGATOR_PROMPT), HumanMessage(content=prompt)])
+
+        # ---- 순수 대화 히스토리 추출 ----
+        # HumanMessage: 사용자의 원본 발화
+        # Tool call이 없는 AIMessage: Aggregator가 이전 턴에 사용자에게 보낸 답변
+        # (Worker나 Planner의 중간 AIMessage는 tool_calls 혹은 내용으로 구분해 제외)
+        chat_history = []
+        for msg in state["messages"]:
+            if isinstance(msg, HumanMessage):
+                chat_history.append(msg)
+            elif isinstance(msg, AIMessage) and not getattr(msg, "tool_calls", None):
+                # Planner/Router의 JSON 출력은 Aggregator 답변과 혼동될 수 있으므로
+                # content가 JSON처럼 보이는 메시지는 히스토리에서 제외합니다.
+                content = msg.content.strip()
+                if not (content.startswith("{") and content.endswith("}")):
+                    chat_history.append(msg)
+
+        # ---- 현재 요청 제거 ----
+        # 마지막 HumanMessage는 current_request와 동일하므로 중복 방지를 위해 히스토리에서 뺍니다.
+        # (current_request를 별도의 마지막 메시지로 명시적으로 추가할 예정)
+        if chat_history and isinstance(chat_history[-1], HumanMessage):
+            chat_history = chat_history[:-1]
+
+        # ---- 메시지 목록 구성 ----
+        msgs = [SystemMessage(content=AGGREGATOR_PROMPT)]
+
+        # 과거 대화 이력을 그대로 주입 (멀티턴 기억)
+        if chat_history:
+            msgs.extend(chat_history)
+
+        # 현재 사용자 요청 + Worker 작업 결과를 마지막 메시지로 추가
+        if past:
+            final_prompt = (
+                f"Current user request: {current_request}\n"
+                f"Worker Results:\n" + "\n".join(f"- {r}" for r in past)
+            )
+        else:
+            final_prompt = (
+                f"Current user request: {current_request}\n"
+                f"(No tool results — direct conversation)"
+            )
+        msgs.append(HumanMessage(content=final_prompt))
+
+        response = llm.invoke(msgs)
         return {"messages": [response]}
     return aggregator_node
 
