@@ -34,10 +34,18 @@ async def get_mcp_tools():
     else:
         # stdio 방식을 위해 mcp 파이썬 환경 절대 경로 사용 (Windows conda run IO 버퍼링 문제 회피)
         config = {
-            "desktop-pet-tools": {
-                "command": MCP_PATH,
-                "args": [MCP_MAIN_SCRIPT],
+            # "desktop-pet-tools": {
+            #     "command": MCP_PATH,
+            #     "args": [MCP_MAIN_SCRIPT],
+            #     "transport": "stdio",
+            # }
+            "windows-mcp": {
+                "command": r"C:\Users\AISW-509-202\anaconda3\envs\mcp\python.exe",
+                "args": ["-m", "windows_mcp"],
                 "transport": "stdio",
+                "env": {
+                    "ANONYMIZED_TELEMETRY": "false"
+                }
             }
         }
 

@@ -42,7 +42,8 @@ logger = logging.getLogger(__name__)
 
 # Structured Output 모델: Master Router가 반환할 worker 이름
 class WorkerDecision(BaseModel):
-    worker: Literal["vision_worker", "general_worker"]
+    # worker: Literal["vision_worker", "general_worker"]
+    worker: Literal["windows_mcp_worker"]
 
 # 실행 전 사용자 승인이 필요한 위험 도구 목록
 DANGEROUS_TOOLS = ["write_file_tool", "delete_file_tool"]
@@ -298,6 +299,19 @@ def make_general_worker(llm_with_tools: Runnable):
 
 
 # ==========================================
+# 3-3. Windows MCP Worker Node (Test)
+# ==========================================
+
+def make_windows_mcp_worker(llm_with_tools: Runnable):
+    """windows-mcp의 모든 도구를 담당하는 단일 Worker."""
+    return _make_base_worker(
+        llm_with_tools,
+        system_prompt=GENERAL_WORKER_PROMPT,  # 임시로 general 프롬프트 재사용
+        worker_label="windows_mcp_worker",
+    )
+
+
+# ==========================================
 # 5. Aggregator Node
 # ==========================================
 
@@ -374,10 +388,10 @@ def route_planner(state: AgentState) -> Literal["master_router", "aggregator"]:
     return "master_router" if state.get("plan") else "aggregator"
 
 
-def route_master_router(state: AgentState) -> Literal["vision_worker", "general_worker", "aggregator"]:
+def route_master_router(state: AgentState) -> Literal["vision_worker", "general_worker", "windows_mcp_worker", "aggregator"]:
     """Router가 선택한 worker로 이동. active_worker가 없으면 모든 계획 완료."""
     worker = state.get("active_worker", "")
-    if worker in ("vision_worker", "general_worker"):
+    if worker in ("vision_worker", "general_worker", "windows_mcp_worker"):
         return worker
     return "aggregator"
 
@@ -394,12 +408,13 @@ def route_worker(state: AgentState) -> Literal["tools", "master_router"]:
     return "master_router"
 
 
-def route_tools(state: AgentState) -> Literal["vision_worker", "general_worker"]:
+def route_tools(state: AgentState) -> Literal["vision_worker", "general_worker", "windows_mcp_worker"]:
     """도구 실행 완료 후 original_request한 Worker로 정확히 복귀."""
-    return state.get("active_worker", "general_worker")
+    return state.get("active_worker", "windows_mcp_worker")
 
 
-def route_entry(state: AgentState) -> Literal["planner", "master_router", "vision_worker", "general_worker"]:
+def route_entry(state: AgentState) -> Literal["planner", "master_router", "vision_worker", "general_worker", "windows_mcp_worker"]:
+
     """
     진입점 라우터.
     MemorySaver가 이전 상태를 복원하므로, 현재 상태를 보고 어느 노드부터 재개할지 결정합니다.

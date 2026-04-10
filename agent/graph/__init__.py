@@ -14,6 +14,7 @@ from .nodes import (
     make_master_router_node,
     make_vision_worker,
     make_general_worker,
+    make_windows_mcp_worker,
     make_aggregator_node,
     route_planner,
     route_master_router,
@@ -21,6 +22,7 @@ from .nodes import (
     route_tools,
     route_entry,
 )
+
 
 logger = logging.getLogger(__name__)
 
@@ -68,24 +70,30 @@ async def create_agent():
             default_headers={"User-Agent": "Mozilla/5.0"},
         )
 
-    vision_tool_names = {"screen", "ocr", "image"}
-    vision_tools  = [t for t in tools if any(k in t.name for k in vision_tool_names)]
-    general_tools = [t for t in tools if t.name not in {v.name for v in vision_tools}]
+    # vision_tool_names = {"screen", "ocr", "image"}
+    # vision_tools  = [t for t in tools if any(k in t.name for k in vision_tool_names)]
+    # general_tools = [t for t in tools if t.name not in {v.name for v in vision_tools}]
 
-    vision_llm  = llm.bind_tools(vision_tools)
-    general_llm = llm.bind_tools(general_tools)
+    # vision_llm  = llm.bind_tools(vision_tools)
+    # general_llm = llm.bind_tools(general_tools)
+    
+    windows_mcp_llm = llm.bind_tools(tools)
 
-    logger.info(f"[Agent] Vision tools: {[t.name for t in vision_tools]}")
-    logger.info(f"[Agent] General tools: {[t.name for t in general_tools]}")
+    # logger.info(f"[Agent] Vision tools: {[t.name for t in vision_tools]}")
+    # logger.info(f"[Agent] General tools: {[t.name for t in general_tools]}")
+    logger.info(f"[Agent] Windows MCP tools: {[t.name for t in tools]}")
+
 
     # ==========================================
     # 노드 초기화
     # ==========================================
     planner_node    = make_planner_node(llm)
     router_node     = make_master_router_node(llm)
-    vision_node     = make_vision_worker(vision_llm)
-    general_node    = make_general_worker(general_llm)
+    # vision_node     = make_vision_worker(vision_llm)
+    # general_node    = make_general_worker(general_llm)
+    windows_mcp_node = make_windows_mcp_worker(windows_mcp_llm)
     aggregator_node = make_aggregator_node(llm)
+
     tool_node       = ToolNode(tools)
 
     # ==========================================
@@ -95,8 +103,9 @@ async def create_agent():
 
     workflow.add_node("planner",        planner_node)
     workflow.add_node("master_router",  router_node)
-    workflow.add_node("vision_worker",  vision_node)
-    workflow.add_node("general_worker", general_node)
+    # workflow.add_node("vision_worker",  vision_node)
+    # workflow.add_node("general_worker", general_node)
+    workflow.add_node("windows_mcp_worker", windows_mcp_node)
     workflow.add_node("aggregator",     aggregator_node)
     workflow.add_node("tools",          tool_node)
 
@@ -104,16 +113,20 @@ async def create_agent():
     workflow.set_conditional_entry_point(route_entry, {
         "planner":        "planner",
         "master_router":  "master_router",
-        "vision_worker":  "vision_worker",
-        "general_worker": "general_worker",
+        # "vision_worker":  "vision_worker",
+        # "general_worker": "general_worker",
+        "windows_mcp_worker": "windows_mcp_worker",
     })
 
     # ---- 노드간 엣지 ----
     workflow.add_conditional_edges("planner",       route_planner,       {"master_router": "master_router", "aggregator": "aggregator"})
-    workflow.add_conditional_edges("master_router", route_master_router, {"vision_worker": "vision_worker", "general_worker": "general_worker", "aggregator": "aggregator"})
-    workflow.add_conditional_edges("vision_worker",  route_worker, {"tools": "tools", "master_router": "master_router"})
-    workflow.add_conditional_edges("general_worker", route_worker, {"tools": "tools", "master_router": "master_router"})
-    workflow.add_conditional_edges("tools",          route_tools,  {"vision_worker": "vision_worker", "general_worker": "general_worker"})
+    # workflow.add_conditional_edges("master_router", route_master_router, {"vision_worker": "vision_worker", "general_worker": "general_worker", "aggregator": "aggregator"})
+    workflow.add_conditional_edges("master_router", route_master_router, {"windows_mcp_worker": "windows_mcp_worker", "aggregator": "aggregator"})
+    # workflow.add_conditional_edges("vision_worker",  route_worker, {"tools": "tools", "master_router": "master_router"})
+    # workflow.add_conditional_edges("general_worker", route_worker, {"tools": "tools", "master_router": "master_router"})
+    workflow.add_conditional_edges("windows_mcp_worker", route_worker, {"tools": "tools", "master_router": "master_router"})
+    # workflow.add_conditional_edges("tools",  route_tools,  {"vision_worker": "vision_worker", "general_worker": "general_worker", "windows_mcp_worker": "windows_mcp_worker"})
+    workflow.add_conditional_edges("tools",  route_tools,  {"windows_mcp_worker": "windows_mcp_worker"})
     workflow.add_edge("aggregator", "__end__")
 
     # ---- 컴파일: 체크포인터 주입 ----
