@@ -15,11 +15,8 @@ LangGraph 그래프를 구성하는 모든 노드 및 조건부 엣지 함수를
 
 import json
 import logging
-import base64 as b64lib
-from io import BytesIO
 from typing import Literal
 
-from PIL import Image
 from pydantic import BaseModel
 from langchain_core.runnables import Runnable
 from langchain_core.messages import SystemMessage, ToolMessage, HumanMessage
@@ -161,13 +158,8 @@ def _build_worker_messages(state: AgentState, system_prompt: str) -> list:
 
 
 def _compress_screenshot(b64_png: str) -> str:
-    """PNG Base64 → JPEG 1280×800 이하 압축 Base64로 변환합니다. (토큰 절약)"""
-    raw = b64lib.b64decode(b64_png)
-    img = Image.open(BytesIO(raw))
-    img.thumbnail((1280, 800), Image.LANCZOS)
-    buf = BytesIO()
-    img.convert("RGB").save(buf, format="JPEG", quality=60)
-    return b64lib.b64encode(buf.getvalue()).decode("utf-8")
+    """압축 없이 원본 Base64를 반환합니다. (Pillow 의존성 제거)"""
+    return b64_png
 
 
 def _apply_vision_postprocess(msgs: list) -> list:
@@ -177,12 +169,11 @@ def _apply_vision_postprocess(msgs: list) -> list:
         if isinstance(msg, ToolMessage) and isinstance(msg.content, str):
             try:
                 data = json.loads(msg.content)
-                if isinstance(data, dict) and "base64_png" in data:
-                    compressed = _compress_screenshot(data["base64_png"])
+                if isinstance(data, dict) and "base64_png" in data:                
                     msg = ToolMessage(
                         content=[
                             {"type": "text", "text": "Screenshot captured. Analyze the image carefully."},
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{compressed}"}},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{data['base64_png']}"}},
                         ],
                         name=msg.name,
                         tool_call_id=msg.tool_call_id,
@@ -306,7 +297,7 @@ def make_windows_mcp_worker(llm_with_tools: Runnable):
     """windows-mcp의 모든 도구를 담당하는 단일 Worker."""
     return _make_base_worker(
         llm_with_tools,
-        system_prompt=GENERAL_WORKER_PROMPT,  # 임시로 general 프롬프트 재사용
+        system_prompt="You are a helpful assistant that controls the Windows desktop. Use the provided tools to perform tasks such as opening applications, managing files, and controlling the mouse and keyboard. Always respond in Korean.",
         worker_label="windows_mcp_worker",
     )
 
