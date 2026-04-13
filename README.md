@@ -18,23 +18,28 @@ Desktop Pet Agent는 데스크톱 화면 위에서 동작하는 캐릭터 기반
 ## 🚀 시작하기
 
 ### 1. 환경 요구 사양
-- **OS**: Windows (권장)
+- **OS**: Windows 10/11 (필수, Windows 기반 MCP 사용)
 - **Python**: 3.11 이상
-- **Conda**: 환경 관리를 위해 설치 권장
+- **Conda**: 다중 시스템 환경 관리를 위해 필수
 
 <br>
 
 ### 2. 설치 방법
 
-프로젝트는 `agent`와 `pet` 두 개의 주요 패키지로 구성되어 있습니다. 각각의 환경을 설정해야 합니다.
+프로젝트는 Agent 서버, Pet UI, 그리고 MCP 서버를 위해 총 3개의 분리된 Conda 환경을 사용합니다. 
 
 ```bash
-# Agent 환경 설정
+# 1. MCP 서버 환경 설정 (스크린샷, 마우스/키보드 제어 등 OS 상호작용)
+cd mcp
+conda env create -f environment.yml
+conda activate mcp
+
+# 2. Agent 서버 환경 설정 (LangGraph 기반 AI 모델 서버)
 cd agent
 conda env create -f environment.yml
 conda activate desktop-pet-agent
 
-# Pet UI 환경 설정
+# 3. Pet UI 환경 설정 (사용자 인터페이스)
 cd pet
 conda env create -f environment.yml
 conda activate pet-ui
@@ -75,9 +80,8 @@ python main.py
 이 프로젝트는 **Plan-and-Execute** 모델을 기반으로 하는 멀티 에이전트 구조를 채택하고 있습니다.
 
 - **Planner**: 사용자 요청을 분석하여 단계별 실행 계획을 수립합니다.
-- **Master Router**: 현재 단계에서 가장 적합한 전문가 에이전트(Vision/General)를 선택합니다.
-- **Vision Worker**: 화면 스크린샷 캡처, OCR 및 시각적 분석을 담당합니다.
-- **General Worker**: 파일 조작, 시스템 제어, 웹 검색 등을 수행합니다.
+- **Master Router**: 현재 작업을 처리할 워커로 적절하게 태스크를 라우팅합니다.
+- **Windows MCP Worker**: `windows-mcp`를 통해 화면 캡처, OCR, 윈도우 파일 시스템 조작, 파워쉘 제어, 브라우저 관리 및 데스크탑 상호작용의 모든 역할을 수행하는 전문가 노드입니다.
 - **Aggregator**: 모든 작업 결과를 취합하여 사용자에게 친절한 답변을 생성합니다.
 - **MemorySaver**: 대화 내용 및 에이전트의 상태를 스레드별로 유지하여 멀티 턴 대화를 지원합니다.
 
@@ -85,15 +89,15 @@ python main.py
 
 ## ✨ 주요 기능
 - **캐릭터 기반 GUI**: 화면 위를 자유롭게 이동하며 상호작용하는 펫 캐릭터.
-- **지능형 작업 실행**: 복잡한 명령(예: "D드라이브 파일 모두 삭제해줘")을 이해하고 분할 실행.
-- **Human-in-the-Loop**: 위험한 작업(파일 삭제 등) 수행 전 사용자 승인 인터페이스 제공.
-- **쿠키 기반 세션 관리**: 멀티 유저 환경을 고려한 안정적인 대화 맥락 유지.
-- **시각적 이해**: 화면의 내용을 캡처하고 분석하여 피드백 제공.
+- **MCP 기반 OS 제어 (Windows MCP)**: 마우스/키보드 직접 입력, 스크린샷 바탕의 시각적 인식, 쉘(Shell) 조작 등을 통한 완벽한 데스크탑 제어.
+- **지능형 작업 실행**: 복잡한 명령(예: "브라우저를 켜서 닐슨 노먼 그룹 홈페이지에 들어가줘")을 언어 모델이 인지하고 단계별 분할 실행.
+- **Human-in-the-Loop**: 위험한 파워쉘 명령어 작동 등 파괴적 행동 수행 전 Agent UI를 통한 사전 승인 체계.
+- **상태 최적화 기술**: 이미지 전송 토큰 비용을 줄이기 위한 Context History 최적화 (순수 텍스트 히스토리 필터링).
 
 <br>
 
 ## 🛠️ 기술 스택
-- **Backend**: FastAPI, LangChain, LangGraph
-- **Frontend**: PySide6 (Python Qt)
+- **Backend (Agent)**: FastAPI, LangChain, LangGraph
+- **Backend (MCP)**: windows-mcp (Model Context Protocol 표준)
+- **Frontend (UI)**: PySide6 (Python Qt)
 - **Database**: MemorySaver (MVP), PostgresSaver (Production ready)
-- **Tools**: PyAutoGUI, httpx, PIL
