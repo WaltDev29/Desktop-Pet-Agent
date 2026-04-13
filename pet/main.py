@@ -2,8 +2,10 @@ import sys
 import threading
 import time
 import uvicorn
+
 from app import create_app
-from app.ui import PetWindow, QApplication
+from app.pet_window import PetWindow, QApplication
+from app.chat_window import ChatWindow, ChatSignaler
 
 def run_ui():
     """별도 스레드에서 UI 실행"""
