@@ -15,11 +15,8 @@ LangGraph 그래프를 구성하는 모든 노드 및 조건부 엣지 함수를
 
 import json
 import logging
-import base64 as b64lib
-from io import BytesIO
 from typing import Literal
 
-from PIL import Image
 from pydantic import BaseModel
 from langchain_core.runnables import Runnable
 from langchain_core.messages import SystemMessage, ToolMessage, HumanMessage
@@ -29,8 +26,7 @@ from .state import AgentState
 from prompts.agents_prompts import (
     PLANNER_PROMPT,
     ROUTER_PROMPT,
-    VISION_WORKER_PROMPT,
-    GENERAL_WORKER_PROMPT,
+    WINDOWS_MCP_WORKER_PROMPT,
     AGGREGATOR_PROMPT,
 )
 
@@ -42,13 +38,14 @@ logger = logging.getLogger(__name__)
 
 # Structured Output 모델: Master Router가 반환할 worker 이름
 class WorkerDecision(BaseModel):
-    worker: Literal["vision_worker", "general_worker"]
+    # worker: Literal["vision_worker", "general_worker"]
+    worker: Literal["windows_mcp_worker"]
 
 # 실행 전 사용자 승인이 필요한 위험 도구 목록
 DANGEROUS_TOOLS = ["write_file_tool", "delete_file_tool"]
 
 # Worker 1회 태스크당 최대 도구 호출 횟수 (무한 루프 방지)
-MAX_TOOL_CALLS = 5
+MAX_TOOL_CALLS = 10
 
 # ==========================================
 # 1. Planner Node
@@ -61,12 +58,13 @@ def make_planner_node(llm: Runnable):
     """
     def planner_node(state: AgentState):
         # 가장 마지막 HumanMessage를 원본 요청으로 저장 (Aggregator에서 정확하게 참조)
+        chat_history = _get_plain_chat_history(state["messages"])
         original_request = next(
-            (msg.content for msg in reversed(state["messages"]) if isinstance(msg, HumanMessage)),
+            (msg.content for msg in reversed(chat_history) if isinstance(msg, HumanMessage)),
             ""
         )
 
-        response = llm.invoke([SystemMessage(content=PLANNER_PROMPT)] + state["messages"])
+        response = llm.invoke([SystemMessage(content=PLANNER_PROMPT)] + chat_history)
 
         plan = []
         try:
@@ -92,6 +90,7 @@ def make_planner_node(llm: Runnable):
             # 두 번 시도 모두 실패 → 단순 대화로 처리
             logger.warning(f"[Planner] JSON 파싱 실패, 단순 대화로 처리합니다. 원인: {e!r}")
 
+        logger.info(f"[Planner] Plan created (length: {len(plan)}): {plan}")
         return {
             "plan": plan,
             "past_results": [],
@@ -125,7 +124,7 @@ def make_master_router_node(llm: Runnable):
             HumanMessage(content=current_task),
         ])
 
-        logger.info(f"[Router] '{current_task[:40]}' → {decision.worker}")
+        logger.info(f"[Router] '{current_task}' → {decision.worker}")
         return {
             "plan": remaining_plan,
             "current_task": current_task,
@@ -136,8 +135,26 @@ def make_master_router_node(llm: Runnable):
 
 
 # ==========================================
-# Worker 공통 유틸리티
+# Worker & Chat History 유틸리티
 # ==========================================
+
+def _get_plain_chat_history(messages: list) -> list:
+    """
+    Graph 상태(messages)에서 순수 대화 내용(HumanMessage + Aggregator의 응답)만 추출합니다.
+    - ToolMessage 제외 (이미지, 대용량 로그 토큰 낭비 방지)
+    - 도구 호출을 포함한 AIMessage 제외
+    - Planner/Router의 JSON 응답(AIMessage) 제외
+    """
+    from langchain_core.messages import AIMessage
+    chat_history = []
+    for msg in messages:
+        if isinstance(msg, HumanMessage):
+            chat_history.append(msg)
+        elif isinstance(msg, AIMessage) and not getattr(msg, "tool_calls", None):
+            content = msg.content.strip() if isinstance(msg.content, str) else ""
+            if not (content.startswith("{") and content.endswith("}")):
+                chat_history.append(msg)
+    return chat_history
 
 def _build_worker_messages(state: AgentState, system_prompt: str) -> list:
     """Worker LLM에 전달할 메시지 목록을 구성합니다."""
@@ -159,39 +176,6 @@ def _build_worker_messages(state: AgentState, system_prompt: str) -> list:
     return msgs + recent
 
 
-def _compress_screenshot(b64_png: str) -> str:
-    """PNG Base64 → JPEG 1280×800 이하 압축 Base64로 변환합니다. (토큰 절약)"""
-    raw = b64lib.b64decode(b64_png)
-    img = Image.open(BytesIO(raw))
-    img.thumbnail((1280, 800), Image.LANCZOS)
-    buf = BytesIO()
-    img.convert("RGB").save(buf, format="JPEG", quality=60)
-    return b64lib.b64encode(buf.getvalue()).decode("utf-8")
-
-
-def _apply_vision_postprocess(msgs: list) -> list:
-    """ToolMessage의 base64_png를 멀티모달(image_url) 포맷으로 변환합니다."""
-    result = []
-    for msg in msgs:
-        if isinstance(msg, ToolMessage) and isinstance(msg.content, str):
-            try:
-                data = json.loads(msg.content)
-                if isinstance(data, dict) and "base64_png" in data:
-                    compressed = _compress_screenshot(data["base64_png"])
-                    msg = ToolMessage(
-                        content=[
-                            {"type": "text", "text": "Screenshot captured. Analyze the image carefully."},
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{compressed}"}},
-                        ],
-                        name=msg.name,
-                        tool_call_id=msg.tool_call_id,
-                    )
-            except Exception as e:
-                logger.warning(f"[Vision] 이미지 변환 실패: {e!r}")
-        result.append(msg)
-    return result
-
-
 # ==========================================
 # 3. 공통 Worker 팩토리
 #    Vision/General이 동일한 구조를 공유합니다.
@@ -203,6 +187,58 @@ def _make_base_worker(llm_with_tools: Runnable, system_prompt: str, worker_label
         msgs = _build_worker_messages(state, system_prompt)
         if postprocess:
             msgs = postprocess(msgs)
+
+        # ---- OpenAI ToolMessage Image Fix ----
+        # OpenAI API는 role이 'tool'인 메시지에 image_url을 허용하지 않습니다.
+        # 따라서 ToolMessage 안의 image(또는 image_url) 블록을 찾아 추출한 뒤,
+        # 바로 이어지는 HumanMessage로 분리해 줍니다.
+        fixed_msgs = []
+        for msg in msgs:
+            if isinstance(msg, ToolMessage) and isinstance(msg.content, list):
+                new_content = []
+                extracted_images = []
+                for item in msg.content:
+                    is_image = False
+                    if isinstance(item, dict):
+                        itype = item.get("type", "")
+                        if "image" in itype: 
+                            is_image = True
+                    elif hasattr(item, "type"):
+                        if "image" in getattr(item, "type", ""):
+                            is_image = True
+
+                    if is_image:
+                        # MCP Adapter가 "image" 타입으로 넘긴 경우 openai가 이해할 수 있는 "image_url" 형식으로 변환해야 할 수도 있습니다.
+                        # 다만 일단 추출하는 것 자체가 목적이므로 그대로 분리합니다.
+                        # 만약 item이 'image'이고 data를 가지고 있다면 변환
+                        if isinstance(item, dict) and item.get("type") == "image" and "source" in item:
+                            # MCP image to OpenAI image_url format
+                            source = item["source"]
+                            mime = source.get("media_type", "image/png")
+                            data = source.get("data", "")
+                            extracted_images.append({
+                                "type": "image_url",
+                                "image_url": {"url": f"data:{mime};base64,{data}"}
+                            })
+                        else:
+                            extracted_images.append(item)
+                    else:
+                        new_content.append(item)
+                
+                # 이미지 블록이 제거된 순수 Text 기반 ToolMessage 추가
+                fixed_msgs.append(ToolMessage(
+                    content=new_content or "Image captured and provided in the next message.", 
+                    name=msg.name, 
+                    tool_call_id=msg.tool_call_id
+                ))
+                
+                # 추출한 이미지가 있다면 HumanMessage로 전환하여 바로 뒤에 이어붙임
+                if extracted_images:
+                    fixed_msgs.append(HumanMessage(content=extracted_images))
+            else:
+                fixed_msgs.append(msg)
+                
+        msgs = fixed_msgs
 
         # ---- 무한 루프 방지 ----
         count = state.get("tool_call_count", 0)
@@ -218,6 +254,7 @@ def _make_base_worker(llm_with_tools: Runnable, system_prompt: str, worker_label
         response = llm_with_tools.invoke(msgs)
 
         if response.tool_calls:
+            logger.info(f"[{worker_label}] Tool Calls requested: {response.tool_calls}")
             # ---- 위험 도구 전수 스캔 ----
             # LLM이 한 번에 여러 tool_call을 반환할 수 있으므로 [0]만 보면 안 됩니다.
             dangerous_calls = [
@@ -260,9 +297,12 @@ def _make_base_worker(llm_with_tools: Runnable, system_prompt: str, worker_label
 
 
         # 도구 호출 없음 → 태스크 완료, Master Router로 복귀
+        final_answer = getattr(response, "content", "No content")
+        logger.info(f"[{worker_label}] Task completed. Sub-task result: {str(final_answer)}...")
         return {
             "messages": [response],
             "past_results": state.get("past_results", []) + [
+
                 f"[{worker_label}] {response.content}"
             ],
             "tool_call_count": 0,
@@ -271,29 +311,15 @@ def _make_base_worker(llm_with_tools: Runnable, system_prompt: str, worker_label
 
 
 # ==========================================
-# 3-1. Vision Worker Node
+# 3-1. Windows MCP Worker Node (Test)
 # ==========================================
 
-def make_vision_worker(llm_with_tools: Runnable):
-    """화면 캡처, OCR, 이미지 분석 전담 Worker."""
+def make_windows_mcp_worker(llm_with_tools: Runnable):
+    """windows-mcp의 모든 도구를 담당하는 단일 Worker."""
     return _make_base_worker(
         llm_with_tools,
-        system_prompt=VISION_WORKER_PROMPT,
-        worker_label="vision_worker",
-        postprocess=_apply_vision_postprocess,
-    )
-
-
-# ==========================================
-# 3-2. General Worker Node
-# ==========================================
-
-def make_general_worker(llm_with_tools: Runnable):
-    """파일 시스템, 시스템 모니터링, 웹 검색 전담 Worker."""
-    return _make_base_worker(
-        llm_with_tools,
-        system_prompt=GENERAL_WORKER_PROMPT,
-        worker_label="general_worker",
+        system_prompt=WINDOWS_MCP_WORKER_PROMPT,
+        worker_label="windows_mcp_worker",
     )
 
 
@@ -320,19 +346,7 @@ def make_aggregator_node(llm: Runnable):
         past = state.get("past_results", [])
 
         # ---- 순수 대화 히스토리 추출 ----
-        # HumanMessage: 사용자의 원본 발화
-        # Tool call이 없는 AIMessage: Aggregator가 이전 턴에 사용자에게 보낸 답변
-        # (Worker나 Planner의 중간 AIMessage는 tool_calls 혹은 내용으로 구분해 제외)
-        chat_history = []
-        for msg in state["messages"]:
-            if isinstance(msg, HumanMessage):
-                chat_history.append(msg)
-            elif isinstance(msg, AIMessage) and not getattr(msg, "tool_calls", None):
-                # Planner/Router의 JSON 출력은 Aggregator 답변과 혼동될 수 있으므로
-                # content가 JSON처럼 보이는 메시지는 히스토리에서 제외합니다.
-                content = msg.content.strip()
-                if not (content.startswith("{") and content.endswith("}")):
-                    chat_history.append(msg)
+        chat_history = _get_plain_chat_history(state["messages"])
 
         # ---- 현재 요청 제거 ----
         # 마지막 HumanMessage는 current_request와 동일하므로 중복 방지를 위해 히스토리에서 뺍니다.
@@ -361,6 +375,8 @@ def make_aggregator_node(llm: Runnable):
         msgs.append(HumanMessage(content=final_prompt))
 
         response = llm.invoke(msgs)
+        final_reply = getattr(response, "content", "")
+        logger.info(f"[Aggregator] Final response: {final_reply}")
         return {"messages": [response]}
     return aggregator_node
 
@@ -374,10 +390,10 @@ def route_planner(state: AgentState) -> Literal["master_router", "aggregator"]:
     return "master_router" if state.get("plan") else "aggregator"
 
 
-def route_master_router(state: AgentState) -> Literal["vision_worker", "general_worker", "aggregator"]:
+def route_master_router(state: AgentState) -> Literal["vision_worker", "general_worker", "windows_mcp_worker", "aggregator"]:
     """Router가 선택한 worker로 이동. active_worker가 없으면 모든 계획 완료."""
     worker = state.get("active_worker", "")
-    if worker in ("vision_worker", "general_worker"):
+    if worker in ("vision_worker", "general_worker", "windows_mcp_worker"):
         return worker
     return "aggregator"
 
@@ -394,12 +410,13 @@ def route_worker(state: AgentState) -> Literal["tools", "master_router"]:
     return "master_router"
 
 
-def route_tools(state: AgentState) -> Literal["vision_worker", "general_worker"]:
+def route_tools(state: AgentState) -> Literal["vision_worker", "general_worker", "windows_mcp_worker"]:
     """도구 실행 완료 후 original_request한 Worker로 정확히 복귀."""
-    return state.get("active_worker", "general_worker")
+    return state.get("active_worker", "windows_mcp_worker")
 
 
-def route_entry(state: AgentState) -> Literal["planner", "master_router", "vision_worker", "general_worker"]:
+def route_entry(state: AgentState) -> Literal["planner", "master_router", "vision_worker", "general_worker", "windows_mcp_worker"]:
+
     """
     진입점 라우터.
     MemorySaver가 이전 상태를 복원하므로, 현재 상태를 보고 어느 노드부터 재개할지 결정합니다.
