@@ -1,5 +1,6 @@
 import logging
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from .router import router
 
 # 기본적인 로깅 설정
@@ -14,11 +15,9 @@ logging.getLogger("graph.nodes").setLevel(logging.INFO)
 logging.getLogger("agent_server.router").setLevel(logging.INFO)
 logging.getLogger("langchain_mcp_adapters").setLevel(logging.DEBUG)
 logging.getLogger("mcp").setLevel(logging.DEBUG)
+
 # ==========================================
 # Agent Server (port 8001)
-# LangGraph 에이전트를 실행하는 서버입니다.
-# Web UI의 채팅 요청을 받아 에이전트를 구동하고,
-# Tool 실행이 필요할 때 Tool Server(8002)에 HTTP 요청을 보냅니다.
 # ==========================================
 
 def create_app():
@@ -26,6 +25,15 @@ def create_app():
         title="Desktop Pet - Agent Server",
         description="LangGraph 에이전트 서버. Tool 실행은 Tool Server(8002)에 위임합니다.",
         version="1.0.0",
+    )
+
+    # CORS 설정 추가 (Web UI 브라우저 통신 허용 - 405 에러 해결)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
     app.include_router(router)

@@ -26,6 +26,7 @@ from .state import AgentState
 from prompts.agents_prompts import (
     PLANNER_PROMPT,
     ROUTER_PROMPT,
+    VISION_WORKER_PROMPT,
     WINDOWS_MCP_WORKER_PROMPT,
     AGGREGATOR_PROMPT,
 )
@@ -38,8 +39,11 @@ logger = logging.getLogger(__name__)
 
 # Structured Output 모델: Master Router가 반환할 worker 이름
 class WorkerDecision(BaseModel):
-    # worker: Literal["vision_worker", "general_worker"]
-    worker: Literal["windows_mcp_worker"]
+    worker: Literal["vision_worker", "windows_mcp_worker"]
+
+# 실행 계획 모델
+class ExecutionPlan(BaseModel):
+    plan: list[str]
 
 # 실행 전 사용자 승인이 필요한 위험 도구 목록
 DANGEROUS_TOOLS = ["write_file_tool", "delete_file_tool"]
@@ -54,41 +58,45 @@ MAX_TOOL_CALLS = 10
 def make_planner_node(llm: Runnable):
     """
     사용자의 요청을 분석해 단계별 실행 계획(Plan)을 수립합니다.
-    단순 대화의 경우 빈 plan을 반환하여 Aggregator로 바로 우회합니다.
     """
+    planner_llm = llm.with_structured_output(ExecutionPlan)
+
     def planner_node(state: AgentState):
         # 가장 마지막 HumanMessage를 원본 요청으로 저장 (Aggregator에서 정확하게 참조)
         chat_history = _get_plain_chat_history(state["messages"])
-        original_request = next(
-            (msg.content for msg in reversed(chat_history) if isinstance(msg, HumanMessage)),
-            ""
-        )
+        original_request = state.get("original_request", "")
+        # Fallback if original_request is empty
+        if not original_request:
+            for msg in reversed(chat_history):
+                if isinstance(msg, HumanMessage):
+                    if isinstance(msg.content, str):
+                        original_request = msg.content
+                    elif isinstance(msg.content, list):
+                        # 모든 텍스트 조각을 합쳐서 추출
+                        texts = [item.get("text", "") for item in msg.content if isinstance(item, dict) and item.get("type") == "text"]
+                        original_request = " ".join(t.strip() for t in texts if t.strip())
+                    break
 
-        response = llm.invoke([SystemMessage(content=PLANNER_PROMPT)] + chat_history)
+        # 이미지 존재 여부 확인 및 플래너 힌트 생성
+        image_count = 0
+        for m in state["messages"]:
+            if isinstance(m, HumanMessage) and isinstance(m.content, list):
+                image_count += sum(1 for item in m.content if isinstance(item, dict) and item.get("type") == "image_url")
+        
+        hint = f"\n\n[System Hint: User has uploaded {image_count} image(s).]" if image_count > 0 else ""
+        
+        # 메시지 조합 (SystemMessage + History + optional Hint)
+        input_msgs = [SystemMessage(content=PLANNER_PROMPT)] + chat_history
+        if hint:
+            input_msgs.append(HumanMessage(content=hint))
 
-        plan = []
         try:
-            content = response.content
-            if "{" in content and "}" in content:
-                start, end = content.find("{"), content.rfind("}") + 1
-                raw = content[start:end]
-                try:
-                    data = json.loads(raw)
-                except json.JSONDecodeError:
-                    # LLM이 Windows 경로(D:\foo)를 JSON 이스케이프 없이 출력한 경우
-                    # 비이스케이프된 백슬래시만 골라서 \\로 치환 후 재시도
-                    import re
-                    fixed = re.sub(
-                        r'\\(?!["\\bfnrtu])',  # 유효한 JSON 이스케이프가 아닌 \ 만 치환
-                        r'\\\\',
-                        raw,
-                    )
-                    data = json.loads(fixed)
-                if "plan" in data and isinstance(data["plan"], list):
-                    plan = data["plan"]
-        except (json.JSONDecodeError, ValueError) as e:
-            # 두 번 시도 모두 실패 → 단순 대화로 처리
-            logger.warning(f"[Planner] JSON 파싱 실패, 단순 대화로 처리합니다. 원인: {e!r}")
+            # Pydantic 모델을 사용해 직접 객체로 수신 (파싱 에러 해결)
+            res_obj: ExecutionPlan = planner_llm.invoke(input_msgs)
+            plan = res_obj.plan if res_obj and res_obj.plan else []
+        except Exception as e:
+            logger.error(f"[Planner] 구조화 출력 생성 실패: {e!r}")
+            plan = []
 
         logger.info(f"[Planner] Plan created (length: {len(plan)}): {plan}")
         return {
@@ -144,19 +152,26 @@ def _get_plain_chat_history(messages: list) -> list:
     - ToolMessage 제외 (이미지, 대용량 로그 토큰 낭비 방지)
     - 도구 호출을 포함한 AIMessage 제외
     - Planner/Router의 JSON 응답(AIMessage) 제외
+    - HumanMessage에 포함된 Base64 이미지 제거 (텍스트만 전달하여 토큰 절약 및 오류 방지)
     """
     from langchain_core.messages import AIMessage
     chat_history = []
     for msg in messages:
         if isinstance(msg, HumanMessage):
-            chat_history.append(msg)
+            if isinstance(msg.content, list):
+                # 멀티모달(이미지 포함) 메시지인 경우 모든 텍스트 조각을 합쳐서 추출
+                texts = [item.get("text", "") for item in msg.content if isinstance(item, dict) and item.get("type") == "text"]
+                text_content = " ".join(t.strip() for t in texts if t.strip())
+                chat_history.append(HumanMessage(content=text_content))
+            else:
+                chat_history.append(msg)
         elif isinstance(msg, AIMessage) and not getattr(msg, "tool_calls", None):
             content = msg.content.strip() if isinstance(msg.content, str) else ""
             if not (content.startswith("{") and content.endswith("}")):
                 chat_history.append(msg)
     return chat_history
 
-def _build_worker_messages(state: AgentState, system_prompt: str) -> list:
+def _build_worker_messages(state: AgentState, system_prompt: str, include_images: bool = False) -> list:
     """Worker LLM에 전달할 메시지 목록을 구성합니다."""
     msgs = [
         SystemMessage(content=system_prompt),
@@ -165,7 +180,19 @@ def _build_worker_messages(state: AgentState, system_prompt: str) -> list:
             f"Past Results: {state.get('past_results', [])}"
         )),
     ]
-    # 최근 도구 호출 / 결과 메시지 덧붙이기 (Worker가 이전 도구 결과를 볼 수 있도록)
+
+    # 사용자가 직접 업로드한 이미지 포함 (Vision Worker 등에서 필요)
+    if include_images:
+        user_images = []
+        for msg in state["messages"]:
+            if isinstance(msg, HumanMessage) and isinstance(msg.content, list):
+                for item in msg.content:
+                    if isinstance(item, dict) and item.get("type") == "image_url":
+                        user_images.append(item)
+        if user_images:
+            msgs.append(HumanMessage(content=user_images))
+
+    # 최근 도구 호출 / 결과 메시지 덧붙이기
     recent = []
     for msg in reversed(state["messages"]):
         if isinstance(msg, ToolMessage):
@@ -311,7 +338,7 @@ def _make_base_worker(llm_with_tools: Runnable, system_prompt: str, worker_label
 
 
 # ==========================================
-# 3-1. Windows MCP Worker Node (Test)
+# 3-1. Windows MCP Worker Node
 # ==========================================
 
 def make_windows_mcp_worker(llm_with_tools: Runnable):
@@ -321,6 +348,29 @@ def make_windows_mcp_worker(llm_with_tools: Runnable):
         system_prompt=WINDOWS_MCP_WORKER_PROMPT,
         worker_label="windows_mcp_worker",
     )
+
+
+# ==========================================
+# 3-2. Vision Worker Node
+# ==========================================
+
+def make_vision_worker(llm: Runnable):
+    """사용자가 업로드한 이미지를 분석하는 전용 Worker."""
+    def vision_worker_node(state: AgentState):
+        msgs = _build_worker_messages(state, VISION_WORKER_PROMPT, include_images=True)
+        
+        response = llm.invoke(msgs)
+        final_answer = getattr(response, "content", "No content")
+        logger.info(f"[Vision Worker] Task completed: {str(final_answer)[:50]}...")
+        
+        return {
+            "messages": [response],
+            "past_results": state.get("past_results", []) + [
+                f"[vision_worker] {response.content}"
+            ],
+            "tool_call_count": 0,
+        }
+    return vision_worker_node
 
 
 # ==========================================
@@ -339,10 +389,19 @@ def make_aggregator_node(llm: Runnable):
     def aggregator_node(state: AgentState):
         from langchain_core.messages import AIMessage
 
-        current_request = state.get("original_request") or next(
-            (msg.content for msg in reversed(state["messages"]) if isinstance(msg, HumanMessage)),
-            ""
-        )
+        original_request = state.get("original_request")
+        if not original_request:
+            for msg in reversed(state["messages"]):
+                if isinstance(msg, HumanMessage):
+                    if isinstance(msg.content, str):
+                        original_request = msg.content
+                    elif isinstance(msg.content, list):
+                        # 모든 텍스트 조각을 합쳐서 추출
+                        texts = [item.get("text", "") for item in msg.content if isinstance(item, dict) and item.get("type") == "text"]
+                        original_request = " ".join(t.strip() for t in texts if t.strip())
+                    break
+        
+        current_request = original_request or ""
         past = state.get("past_results", [])
 
         # ---- 순수 대화 히스토리 추출 ----
@@ -361,16 +420,26 @@ def make_aggregator_node(llm: Runnable):
         if chat_history:
             msgs.extend(chat_history)
 
+        # ---- 이미지 존재 여부 힌트 (Aggregator 인지력 강화) ----
+        image_count = 0
+        for m in state["messages"]:
+            if isinstance(m, HumanMessage) and isinstance(m.content, list):
+                image_count += sum(1 for item in m.content if isinstance(item, dict) and item.get("type") == "image_url")
+        
+        image_hint = f"\n(Note: User has uploaded {image_count} image(s). Relevant analysis is in the Worker Results above.)" if image_count > 0 else ""
+
         # 현재 사용자 요청 + Worker 작업 결과를 마지막 메시지로 추가
         if past:
             final_prompt = (
                 f"Current user request: {current_request}\n"
-                f"Worker Results:\n" + "\n".join(f"- {r}" for r in past)
+                f"Worker Results:\n" + "\n".join(f"- {r}" for r in past) +
+                image_hint
             )
         else:
             final_prompt = (
                 f"Current user request: {current_request}\n"
-                f"(No tool results — direct conversation)"
+                f"(No tool results — direct conversation)" +
+                image_hint
             )
         msgs.append(HumanMessage(content=final_prompt))
 
@@ -390,10 +459,10 @@ def route_planner(state: AgentState) -> Literal["master_router", "aggregator"]:
     return "master_router" if state.get("plan") else "aggregator"
 
 
-def route_master_router(state: AgentState) -> Literal["vision_worker", "general_worker", "windows_mcp_worker", "aggregator"]:
+def route_master_router(state: AgentState) -> Literal["vision_worker", "windows_mcp_worker", "aggregator"]:
     """Router가 선택한 worker로 이동. active_worker가 없으면 모든 계획 완료."""
     worker = state.get("active_worker", "")
-    if worker in ("vision_worker", "general_worker", "windows_mcp_worker"):
+    if worker in ("vision_worker", "windows_mcp_worker"):
         return worker
     return "aggregator"
 
@@ -410,12 +479,12 @@ def route_worker(state: AgentState) -> Literal["tools", "master_router"]:
     return "master_router"
 
 
-def route_tools(state: AgentState) -> Literal["vision_worker", "general_worker", "windows_mcp_worker"]:
+def route_tools(state: AgentState) -> Literal["vision_worker", "windows_mcp_worker"]:
     """도구 실행 완료 후 original_request한 Worker로 정확히 복귀."""
     return state.get("active_worker", "windows_mcp_worker")
 
 
-def route_entry(state: AgentState) -> Literal["planner", "master_router", "vision_worker", "general_worker", "windows_mcp_worker"]:
+def route_entry(state: AgentState) -> Literal["planner", "master_router", "vision_worker", "windows_mcp_worker"]:
 
     """
     진입점 라우터.

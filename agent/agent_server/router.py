@@ -34,6 +34,7 @@ router = APIRouter()
 
 class ChatRequest(BaseModel):
     message: str
+    images: list[str] = []         # base64 인코딩된 이미지 문자열 리스트 (최대 3개 제한)
     session_id: str | None = None  # 쿠키가 유실됐을 때를 대비한 이중 안전장치
 
 class ApprovalRequest(BaseModel):
@@ -66,11 +67,20 @@ def _make_config(session_id: str) -> dict:
     return {"configurable": {"thread_id": f"{user_id}:{session_id}"}}
 
 
-def _initial_state(message: str) -> dict:
+def _initial_state(request: ChatRequest) -> dict:
     """새 대화 턴 시작 시 전달할 초기 State를 반환합니다."""
+    # 이미지가 있는 경우 멀티모달 포맷으로 구성
+    if request.images:
+        content = [{"type": "text", "text": request.message}]
+        # 최대 3개까지만 제한
+        for img in request.images[:3]:
+            content.append({"type": "image_url", "image_url": {"url": img}})
+    else:
+        content = request.message
+
     return {
-        "messages":        [HumanMessage(content=message)],
-        "original_request": "",
+        "messages":        [HumanMessage(content=content)],
+        "original_request": request.message, # Planner 및 Aggregator에서 사용할 순수 텍스트 요청
         "plan":            [],
         "current_task":    "",
         "past_results":    [],
@@ -105,7 +115,7 @@ async def chat_endpoint(
 
     agent  = await _get_or_create_agent()
     config = _make_config(session_id)
-    state  = _initial_state(request.message)
+    state  = _initial_state(request)
 
     try:
         result = await agent.ainvoke(state, config=config)

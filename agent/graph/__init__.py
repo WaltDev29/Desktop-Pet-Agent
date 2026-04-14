@@ -13,6 +13,7 @@ from .nodes import (
     make_planner_node,
     make_master_router_node,
     make_windows_mcp_worker,
+    make_vision_worker,
     make_aggregator_node,
     route_planner,
     route_master_router,
@@ -79,6 +80,7 @@ async def create_agent():
     planner_node    = make_planner_node(llm)
     router_node     = make_master_router_node(llm)
     windows_mcp_node = make_windows_mcp_worker(windows_mcp_llm)
+    vision_worker_node = make_vision_worker(llm)
     aggregator_node = make_aggregator_node(llm)
 
     tool_node       = ToolNode(tools)
@@ -91,6 +93,7 @@ async def create_agent():
     workflow.add_node("planner",        planner_node)
     workflow.add_node("master_router",  router_node)
     workflow.add_node("windows_mcp_worker", windows_mcp_node)
+    workflow.add_node("vision_worker",      vision_worker_node)
     workflow.add_node("aggregator",     aggregator_node)
     workflow.add_node("tools",          tool_node)
 
@@ -99,13 +102,15 @@ async def create_agent():
         "planner":        "planner",
         "master_router":  "master_router",
         "windows_mcp_worker": "windows_mcp_worker",
+        "vision_worker":      "vision_worker",
     })
 
     # ---- 노드간 엣지 ----
     workflow.add_conditional_edges("planner", route_planner, {"master_router": "master_router", "aggregator": "aggregator"})
-    workflow.add_conditional_edges("master_router", route_master_router, {"windows_mcp_worker": "windows_mcp_worker", "aggregator": "aggregator"})
+    workflow.add_conditional_edges("master_router", route_master_router, {"windows_mcp_worker": "windows_mcp_worker", "vision_worker": "vision_worker", "aggregator": "aggregator"})
     workflow.add_conditional_edges("windows_mcp_worker", route_worker, {"tools": "tools", "master_router": "master_router"})
-    workflow.add_conditional_edges("tools",  route_tools,  {"windows_mcp_worker": "windows_mcp_worker"})
+    workflow.add_conditional_edges("vision_worker", route_worker, {"tools": "tools", "master_router": "master_router"})
+    workflow.add_conditional_edges("tools",  route_tools,  {"windows_mcp_worker": "windows_mcp_worker", "vision_worker": "vision_worker"})
     workflow.add_edge("aggregator", "__end__")
 
     # ---- 컴파일: 체크포인터 주입 ----
