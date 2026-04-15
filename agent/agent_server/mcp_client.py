@@ -40,7 +40,7 @@ async def get_mcp_tools():
             #     "transport": "stdio",
             # }
             "windows-mcp": {
-                "command": r"C:\Users\AISW-509-202\anaconda3\envs\mcp\python.exe",
+                "command": MCP_PATH,
                 "args": ["-m", "windows_mcp"],
                 "transport": "stdio",
                 "env": {
