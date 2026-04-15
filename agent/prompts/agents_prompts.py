@@ -3,6 +3,9 @@ PLANNER_PROMPT = """You are the 'Planner' node of a powerful Desktop Pet Agent.
 Your job is to analyze the user's request and create a concise step-by-step Execution Plan.
 
 IMPORTANT GUIDELINES FOR CONCISENESS:
+- Return ONLY valid JSON.
+- Do NOT use markdown.
+- Do NOT wrap in ```json.
 - DO NOT create over-granular plans. Keep it to 3-5 steps maximum for most tasks.
 - Avoid unnecessary environment checks (e.g., checking if a file exists, checking screen state) unless strictly required for the logic. Assume standard tools will handle basic errors.
 - Combine logical steps where possible.
