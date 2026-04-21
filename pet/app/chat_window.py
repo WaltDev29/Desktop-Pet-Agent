@@ -1,6 +1,6 @@
 import threading
-import requests
 import html
+import json
 import base64
 import os
 
@@ -315,10 +315,12 @@ class ChatWindow(QWidget):
 
         self.pending_tool_call_id = None
         self.session_id = None
-        self.web_ui_url = "http://localhost:8000"
-        self.session = requests.Session()
+        self.ws_url = "ws://localhost:8000/ws"
+        self.ws_conn = None
+        self._ws_lock = threading.Lock()
 
         self.pet_window = pet_window
+        self._start_websocket_thread()
 
     def attach_image(self):
         """파일 선택 다이얼로그로 이미지를 첨부합니다."""
@@ -425,41 +427,54 @@ class ChatWindow(QWidget):
         self.input_field.setEnabled(False)
         self.attach_btn.setEnabled(False)
 
-        # images: list[str] — 각 항목은 'data:image/{mime};base64,...' 형식의 data URI
-        # router.py _initial_state() 에서 {"type": "image_url", "image_url": {"url": img}} 로 변환됨
-        payload = {"message": api_message, "images": images}
-        thread = threading.Thread(target=self.send_to_api, args=(payload,))
-        thread.daemon = True
-        thread.start()
+        payload = {"action": "chat", "message": api_message, "images": images}
+        self._send_ws_message(payload)
             
     def scrollToBottom(self):
         scrollbar = self.chat_history.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
     
-    def send_to_api(self, data_input, endpoint="/chat"):
+    def _start_websocket_thread(self):
+        thread = threading.Thread(target=self._websocket_worker, daemon=True)
+        thread.start()
+
+    def _websocket_worker(self):
+        from websockets.sync.client import connect
         try:
-            # data_input이 str이면 단순 텍스트 메시지, dict이면 이미지 포함 payload
-            if isinstance(data_input, str):
-                json_data = {"message": data_input}
-            else:
-                # dict는 그대로 사용 (message, images, session_id 등 이미 구성됨)
-                json_data = dict(data_input)  # 원본 dict를 복사해 안전하게 mutate
-
-            if self.session_id:
-                json_data["session_id"] = self.session_id
-
-            response = self.session.post(
-                f"{self.web_ui_url}{endpoint}",
-                json=json_data
-            )
-
-            if response.status_code == 200:
-                data = response.json()
-                self.signaler.response_received.emit(data)
-            else:
-                self.signaler.error_occurred.emit(f"서버 오류 ({response.status_code}): {response.text[:200]}")
+            with connect(self.ws_url) as websocket:
+                with self._ws_lock:
+                    self.ws_conn = websocket
+                
+                # Listen continuously
+                while True:
+                    try:
+                        message = websocket.recv()
+                        data = json.loads(message)
+                        self.signaler.response_received.emit(data)
+                    except Exception as e:
+                        print(f"WebSocket 닫힘 또는 수신 에러: {e}")
+                        break
         except Exception as e:
-            self.signaler.error_occurred.emit(f"연결 오류: {e}")
+            self.signaler.error_occurred.emit(f"WebSocket 서버 연결 실패: {e}")
+        finally:
+            with self._ws_lock:
+                self.ws_conn = None
+
+    def _send_ws_message(self, payload: dict):
+        if self.session_id:
+            payload["session_id"] = self.session_id
+        
+        def _do_send():
+            with self._ws_lock:
+                if self.ws_conn:
+                    try:
+                        self.ws_conn.send(json.dumps(payload))
+                    except Exception as e:
+                        self.signaler.error_occurred.emit(f"메시지 전송 실패: {e}")
+                else:
+                    self.signaler.error_occurred.emit("서버와 연결되어 있지 않습니다. 다시 실행해주세요.")
+
+        threading.Thread(target=_do_send, daemon=True).start()
 
     
     def on_response_received(self, data: dict):
@@ -505,13 +520,11 @@ class ChatWindow(QWidget):
         self.scrollToBottom()
 
         payload = {
+            "action": "approve",
             "approve": is_approved,
             "tool_call_id": self.pending_tool_call_id
         }
-
-        thread = threading.Thread(target=self.send_to_api, args=(payload, "/approve"))
-        thread.daemon = True
-        thread.start()
+        self._send_ws_message(payload)
 
     def on_error_occurred(self, error: str):
         safe_error = html.escape(error)
@@ -571,8 +584,12 @@ class ChatWindow(QWidget):
     def close_program(self):
         self.is_shutting_down = True
         
-        if hasattr(self, 'session') and self.session:
-            self.session.close()
+        with self._ws_lock:
+            if hasattr(self, 'ws_conn') and self.ws_conn:
+                try:
+                    self.ws_conn.close()
+                except Exception:
+                    pass
             
         QApplication.instance().quit()
         

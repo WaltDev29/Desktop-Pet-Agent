@@ -1,7 +1,8 @@
 import os
 import uuid
-import httpx
-from fastapi import FastAPI, Request
+import asyncio
+import websockets
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from pathlib import Path
@@ -14,150 +15,63 @@ def create_app() -> FastAPI:
     # ==========================================
     # Pet App Server (port 8000)
     # PySide6 UI와 Agent Server(8001) 사이의 중간 계층입니다.
-    # 향후 로컬 Tool 실행 명령을 수신/중계하는 역할도 담당하게 됩니다.
-    #
-    # [세션 관리 방식]
-    # Pet App Server가 session_id를 직접 발급하고 PySide6에 쿠키로 내려줍니다.
-    # Agent Server의 쿠키를 중계하는 방식은 httpx 헤더 처리 특성상 불안정하므로
-    # Pet App Server가 세션을 독립적으로 관리하는 것이 더 안정적입니다.
+    # HTTP 대신 WebSocket 기반으로 양방향 통신을 중계(Proxy)합니다.
     # ==========================================
     app = FastAPI(
         title="Desktop Pet - App Server",
         description="PySide6 UI와 Agent Server 사이의 중간 계층.",
     )
 
-    # ==========================================
-    # 요청/응답 스키마
-    # ==========================================
-    class ChatRequest(BaseModel):
-        message: str
-        images: list[str] = []  # base64 인코딩된 이미지 문자열 리스트 (최대 3개)
-        session_id: str | None = None
-
-    class ApprovalRequest(BaseModel):
-        approve: bool
-        tool_call_id: str
-
-    @app.post("/chat")
-    async def chat_endpoint(request: ChatRequest, req: Request):
+    @app.websocket("/ws")
+    async def websocket_proxy_endpoint(client_ws: WebSocket):
         """
-        사용자 메시지를 Agent Server로 전달하고 응답을 반환합니다.
-
-        세션 관리:
-        - PySide6가 보낸 쿠키에서 session_id를 읽습니다.
-        - session_id가 없으면 Pet App Server가 직접 발급합니다.
-        - 발급된 session_id를 PySide6에 쿠키로 내려주고, Agent Server로도 전달합니다.
+        프론트엔드(또는 PySide6)로부터 연결을 받아, 백엔드 Agent Server로 웹소켓을 연결하고
+        서로의 메시지를 양방향으로 중계(Proxy)합니다.
         """
-        # PySide6 requests.Session이 보유한 session_id 읽기 (없으면 신규 발급)
-        session_id = req.cookies.get("session_id") or str(uuid.uuid4())
+        await client_ws.accept()
+        
+        agent_ws_url = AGENT_SERVER_URL.replace("http://", "ws://").replace("https://", "wss://") + "/ws"
 
         try:
-            async with httpx.AsyncClient() as client:
-                agent_resp = await client.post(
-                    f"{AGENT_SERVER_URL}/chat",
-                    json={
-                        "message": request.message,
-                        "images": request.images,
-                        "session_id": session_id,
-                    },
-                    cookies={"session_id": session_id},
-                    timeout=180.0,
+            # Agent Server(백엔드)와 웹소켓 연결
+            async with websockets.connect(agent_ws_url) as agent_ws:
+                
+                # Client -> Agent 로 메시지 포워딩
+                async def forward_to_agent():
+                    try:
+                        while True:
+                            data = await client_ws.receive_text()
+                            await agent_ws.send(data)
+                    except WebSocketDisconnect:
+                        pass  # 클라이언트 연동 종료
+                    except Exception as e:
+                        print(f"forward_to_agent error: {e}")
+
+                # Agent -> Client 로 메시지 포워딩
+                async def forward_to_client():
+                    try:
+                        while True:
+                            data = await agent_ws.recv()
+                            await client_ws.send_text(data)
+                    except websockets.exceptions.ConnectionClosed:
+                        pass  # 백엔드 연동 종료
+                    except Exception as e:
+                        print(f"forward_to_client error: {e}")
+
+                # 양방향 포워딩 동시 실행
+                await asyncio.gather(
+                    forward_to_agent(),
+                    forward_to_client(),
+                    return_exceptions=True
                 )
-
-            # 에이전트 오류 처리
-            if agent_resp.status_code != 200:
-                try:
-                    error_body = agent_resp.json()
-                    error_msg = error_body.get("message", "")
-                except Exception:
-                    error_msg = agent_resp.text
-
-                # 이미지 미지원 LLM 에러 → 친화적 메시지
-                if "image input is not supported" in error_msg:
-                    friendly = "⚠️ 현재 연결된 AI 모델이 이미지 입력을 지원하지 않습니다.\n텍스트만으로 다시 질문해 주세요."
-                    content = {"status": "error", "message": friendly}
-                else:
-                    content = {"status": "error", "message": f"에이전트 오류: {error_msg[:300]}"}
-
-                response = JSONResponse(content=content, status_code=200)
-                response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
-                return response
-
-            # 정상 응답
-            response = JSONResponse(content=agent_resp.json())
-            response.set_cookie(
-                key="session_id",
-                value=session_id,
-                httponly=True,
-                samesite="lax",
-            )
-            return response
-
-        except httpx.ConnectError:
-            return JSONResponse(
-                content={
-                    "status": "error",
-                    "message": f"Agent Server({AGENT_SERVER_URL})에 연결할 수 없습니다. Agent Server가 실행 중인지 확인하세요.",
-                },
-                status_code=503,
-            )
+                
         except Exception as e:
-            return JSONResponse(
-                content={"status": "error", "message": str(e)},
-                status_code=500,
-            )
-
-    @app.post("/approve")
-    async def approve_endpoint(request: ApprovalRequest, req: Request):
-        """
-        사용자의 승인/거절 결과를 Agent Server로 전달합니다.
-
-        세션 관리:
-        - PySide6 requests.Session이 자동으로 보내는 session_id 쿠키를 읽습니다.
-        - 해당 session_id를 Agent Server로 전달하여 중단된 그래프를 재개합니다.
-        """
-        session_id = req.cookies.get("session_id")
-        if not session_id:
-            return JSONResponse(
-                content={"status": "error", "message": "세션이 없습니다. 새로 대화를 시작해주세요."},
-                status_code=400,
-            )
-
-        try:
-            async with httpx.AsyncClient() as client:
-                agent_resp = await client.post(
-                    f"{AGENT_SERVER_URL}/approve",
-                    json={
-                        "approve": request.approve,
-                        "tool_call_id": request.tool_call_id,
-                        "session_id": session_id,  # 쿠키 유실 대비 이중 안전장치
-                    },
-                    cookies={"session_id": session_id},
-                    timeout=180.0,
-                )
-
-            response = JSONResponse(content=agent_resp.json())
-            # 쿠키 만료 방지: 매 응답마다 갱신
-            response.set_cookie(
-                key="session_id",
-                value=session_id,
-                httponly=True,
-                samesite="lax",
-            )
-            return response
-
-        except httpx.ConnectError:
-            return JSONResponse(
-                content={
-                    "status": "error",
-                    "message": "Agent Server에 연결할 수 없습니다.",
-                },
-                status_code=503,
-            )
-        except Exception as e:
-            return JSONResponse(
-                content={"status": "error", "message": str(e)},
-                status_code=500,
-            )
+            error_msg = f"Agent Server에 연결할 수 없습니다. ({e})"
+            try:
+                await client_ws.send_json({"status": "error", "message": error_msg})
+                await client_ws.close()
+            except Exception:
+                pass
 
     return app
+
