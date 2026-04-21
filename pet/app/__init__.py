@@ -31,6 +31,8 @@ def create_app() -> FastAPI:
     # ==========================================
     class ChatRequest(BaseModel):
         message: str
+        images: list[str] = []  # base64 인코딩된 이미지 문자열 리스트 (최대 3개)
+        session_id: str | None = None
 
     class ApprovalRequest(BaseModel):
         approve: bool
@@ -55,13 +57,33 @@ def create_app() -> FastAPI:
                     f"{AGENT_SERVER_URL}/chat",
                     json={
                         "message": request.message,
-                        "session_id": session_id,  # 쿠키 유실 대비 이중 안전장치
+                        "images": request.images,
+                        "session_id": session_id,
                     },
                     cookies={"session_id": session_id},
                     timeout=180.0,
                 )
 
-            # Pet App Server가 직접 Set-Cookie를 발급 (Agent Server의 쿠키 중계 불필요)
+            # 에이전트 오류 처리
+            if agent_resp.status_code != 200:
+                try:
+                    error_body = agent_resp.json()
+                    error_msg = error_body.get("message", "")
+                except Exception:
+                    error_msg = agent_resp.text
+
+                # 이미지 미지원 LLM 에러 → 친화적 메시지
+                if "image input is not supported" in error_msg:
+                    friendly = "⚠️ 현재 연결된 AI 모델이 이미지 입력을 지원하지 않습니다.\n텍스트만으로 다시 질문해 주세요."
+                    content = {"status": "error", "message": friendly}
+                else:
+                    content = {"status": "error", "message": f"에이전트 오류: {error_msg[:300]}"}
+
+                response = JSONResponse(content=content, status_code=200)
+                response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
+                return response
+
+            # 정상 응답
             response = JSONResponse(content=agent_resp.json())
             response.set_cookie(
                 key="session_id",
