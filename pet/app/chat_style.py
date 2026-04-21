@@ -38,6 +38,48 @@ QLineEdit:focus {
 
 CLOSE_BTN_STYLE = "background-color: #FF5F56; color: white; border-radius: 10px; font-weight: bold; font-size: 11px;"
 
+ATTACH_BTN_STYLE = """
+QPushButton {
+    background-color: transparent;
+    color: #888888;
+    border: none;
+    font-size: 18px;
+    padding: 2px 4px;
+}
+QPushButton:hover {
+    color: #555555;
+}
+QPushButton:disabled {
+    color: #CCCCCC;
+}
+"""
+
+IMAGE_PREVIEW_AREA_STYLE = """
+QWidget#image_preview_area {
+    background-color: #F7F7F7;
+    border: 1px dashed #D0D0D0;
+    border-radius: 10px;
+}
+"""
+
+IMAGE_REMOVE_BTN_STYLE = """
+QPushButton {
+    background-color: rgba(0, 0, 0, 160);
+    color: white;
+    border-radius: 8px;
+    font-size: 10px;
+    font-weight: bold;
+    padding: 0px;
+    min-width: 16px;
+    max-width: 16px;
+    min-height: 16px;
+    max-height: 16px;
+}
+QPushButton:hover {
+    background-color: rgba(220, 50, 50, 200);
+}
+"""
+
 WINDOW_WIDTH = 300
 WINDOW_HEIGHT = 400
 
@@ -81,4 +123,31 @@ ERROR_MSG_FORMAT = f"""
         <tr><td><span style='color: #FF0000; font-family: {FONT_FAMILY}; font-size: 11px;'>⚠️ {{text}}</span></td></tr>
     </table>
 </div>
+"""
+
+OPACITY_SLIDER_STYLE = """
+QSlider::groove:horizontal {
+    background: #ddd;
+    height: 4px;
+    border-radius: 2px;
+}
+QSlider::handle:horizontal {
+    background: #5cb85c;
+    width: 16px;
+    height: 16px;
+    border-radius: 8px;
+    margin: -6px 0;
+}
+QSlider::handle:horizontal:hover {
+    background: #4cae4c;
+}
+"""
+
+OPACITY_LABEL_STYLE = f"""
+QLabel {{
+    color: #333333;
+    font-family: {FONT_FAMILY};
+    font-size: 11px;
+    font-weight: bold;
+}}
 """

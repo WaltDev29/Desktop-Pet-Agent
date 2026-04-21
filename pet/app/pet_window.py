@@ -1,6 +1,6 @@
 import random
 from PySide6.QtWidgets import QWidget, QLabel, QApplication
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QPoint
 from PySide6.QtGui import QMovie
 
 from app.chat_window import ChatWindow
@@ -37,8 +37,10 @@ class PetWindow(QWidget):
         screen_geo = self.screen().availableGeometry()
         width, height = screen_geo.width(), screen_geo.height()
         
-        self.min_x, self.max_x = width * MOVEMENT_X_MIN_RATIO, width * MOVEMENT_X_MAX_RATIO - self.width()
-        self.min_y, self.max_y = height * MOVEMENT_Y_MIN_RATIO, height * MOVEMENT_Y_MAX_RATIO - self.height()
+        self.min_x = width * MOVEMENT_X_MIN_RATIO
+        self.max_x = width * MOVEMENT_X_MAX_RATIO - self.width()
+        self.min_y = height * MOVEMENT_Y_MIN_RATIO
+        self.max_y = height * MOVEMENT_Y_MAX_RATIO - self.height()
 
         self.curr_x = random.uniform(self.min_x, self.max_x)
         self.curr_y = random.uniform(self.min_y, self.max_y)
@@ -46,15 +48,23 @@ class PetWindow(QWidget):
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_logic)
-        self.timer.start(16) 
-        
+        self.timer.start(16)
+
         self.x_speed, self.y_speed = 0.5, 0.5
-        self.change_dir_timer = 0 
-        self.is_interacting = False 
-        self.chat_win = ChatWindow()
+        self.change_dir_timer = 0
+        self.is_interacting = False
+        self.is_paused = False          # 우클릭으로 멈춤 여부
+        self.chat_win = ChatWindow(self)
+
+        # ── 드래그 상태 ──────────────────────────────────────
+        self._drag_active = False
+        self._drag_start_cursor: QPoint | None = None
+        self._drag_start_pet: QPoint | None = None
+        self._drag_start_chat: QPoint | None = None
 
     def update_logic(self):
-        if self.is_interacting: return 
+        if self.is_interacting or self.is_paused:
+            return
         
         self.change_dir_timer += 1
         if self.change_dir_timer > 100: 
@@ -74,19 +84,68 @@ class PetWindow(QWidget):
         self.curr_y = max(self.min_y, min(self.curr_y, self.max_y))
         self.move(int(self.curr_x), int(self.curr_y))
 
+    # ── 마우스 이벤트 (클릭 vs 드래그 구분) ────────────────────
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            self.interact_with_pet()
+            self.start_drag(event.globalPosition().toPoint())
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton and self._drag_start_cursor is not None:
+            delta = event.globalPosition().toPoint() - self._drag_start_cursor
+            if not self._drag_active and delta.manhattanLength() > 5:
+                self._drag_active = True
+                # 드래그 중 자동이동 타이머 일시 정지
+                self.timer.stop()
+            if self._drag_active:
+                self.do_drag(event.globalPosition().toPoint())
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            if self._drag_active:
+                # 드래그 종료 → 자동이동 재개
+                self.end_drag()
+            else:
+                # 단순 클릭 → 채팅창 토글
+                self.interact_with_pet()
+        elif event.button() == Qt.RightButton and not self._drag_active:
+            # 우클릭 → 자동이동 멈춤/재개 토글
+            self.is_paused = not self.is_paused
+
+    # ── 드래그 공개 메서드 (ChatWindow에서도 호출) ────────────────
+    def start_drag(self, cursor_global: QPoint):
+        """드래그 시작: 시작 위치를 기억합니다."""
+        self._drag_active = False
+        self._drag_start_cursor = cursor_global
+        self._drag_start_pet = self.pos()
+        self._drag_start_chat = self.chat_win.pos() if self.chat_win.isVisible() else None
+
+    def do_drag(self, cursor_global: QPoint):
+        """드래그 중: 커서 delta만큼 펫·채팅창을 함께 이동합니다."""
+        if self._drag_start_cursor is None:
+            return
+        delta = cursor_global - self._drag_start_cursor
+        new_pet = self._drag_start_pet + delta
+        # curr_x/y 도 갱신해 자동이동이 재개될 때 현재 위치 기준으로 시작
+        self.curr_x = float(new_pet.x())
+        self.curr_y = float(new_pet.y())
+        self.move(new_pet)
+        if self._drag_start_chat is not None:
+            self.chat_win.move(self._drag_start_chat + delta)
+
+    def end_drag(self):
+        """드래그 종료: 상태 초기화 후 자동이동 재개."""
+        self._drag_active = False
+        self._drag_start_cursor = None
+        self._drag_start_pet = None
+        self._drag_start_chat = None
+        self.timer.start(16)
 
     def interact_with_pet(self):
         self.is_interacting = not self.is_interacting
         if self.is_interacting:
             pet_center_x = self.x() + (self.width() // 2)
-
             chat_x = pet_center_x - (self.chat_win.width() // 2)
-
             chat_y = self.y() - self.chat_win.height() - 15
-            
             self.chat_win.move(chat_x, chat_y)
             self.chat_win.show()
             self.chat_win.input_field.setFocus()
