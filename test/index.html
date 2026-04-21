@@ -47,7 +47,7 @@
 </div>
 
 <script>
-    const API_URL = "http://localhost:8001/chat";
+    const API_URL = "ws://localhost:8001/ws";
     const fileInput = document.getElementById('file-input');
     const previewContainer = document.getElementById('image-preview-container');
     const messageInput = document.getElementById('message-input');
@@ -56,6 +56,53 @@
     
     let selectedImages = []; // base64 strings
     let currentSessionId = localStorage.getItem('agent_session_id');
+    let ws = null;
+
+    function connectWebSocket() {
+        ws = new WebSocket(API_URL);
+        
+        ws.onopen = () => {
+            appendMessage("서버와 연결되었습니다. 🟢", "agent");
+        };
+
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            
+            if (data.session_id) {
+                currentSessionId = data.session_id;
+                localStorage.setItem('agent_session_id', data.session_id);
+            }
+            
+            if (data.status === "approval_required") {
+                appendMessage(`⚠️ 승인 필요: ${data.message}`, "agent");
+                renderApprovalButtons();
+            } else if (data.status === "error") {
+                appendMessage(`❌ 에러: ${data.message}`, "agent");
+                resetSendButton();
+            } else {
+                appendMessage(data.message || "응답이 없습니다.", "agent");
+                resetSendButton();
+            }
+        };
+
+        ws.onclose = () => {
+            appendMessage("서버와의 연결이 끊어졌습니다. 새로고침 해주세요. 🔴", "agent");
+            resetSendButton();
+        };
+        
+        ws.onerror = (error) => {
+            console.error("WebSocket Error:", error);
+            // 에러 메시지는 onclose에서 처리될 수 있으므로 별도 알림 생략 혹은 필요 시 추가
+        };
+    }
+
+    // 초기 웹소켓 연결
+    connectWebSocket();
+
+    function resetSendButton() {
+        sendBtn.disabled = false;
+        sendBtn.innerText = '전송';
+    }
 
     fileInput.addEventListener('change', async (e) => {
         const files = Array.from(e.target.files);
@@ -116,9 +163,58 @@
         return msgDiv;
     }
 
-    async function sendMessage() {
+    function renderApprovalButtons() {
+        const msgDiv = document.createElement('div');
+        msgDiv.className = `message user`;
+        msgDiv.style.backgroundColor = "transparent";
+        msgDiv.style.display = "flex";
+        msgDiv.style.gap = "10px";
+        
+        const approveBtn = document.createElement('button');
+        approveBtn.innerText = '✅ 승인 (True)';
+        approveBtn.style.backgroundColor = '#28a745';
+        approveBtn.onclick = () => {
+            msgDiv.remove();
+            handleApprove(true);
+        };
+        
+        const rejectBtn = document.createElement('button');
+        rejectBtn.innerText = '❌ 거절 (False)';
+        rejectBtn.style.backgroundColor = '#dc3545';
+        rejectBtn.onclick = () => {
+            msgDiv.remove();
+            handleApprove(false);
+        };
+        
+        msgDiv.appendChild(approveBtn);
+        msgDiv.appendChild(rejectBtn);
+        chatBox.appendChild(msgDiv);
+        chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    function handleApprove(approve) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        
+        appendMessage(approve ? "✅ 승인합니다." : "❌ 거절합니다.", "user");
+        
+        sendBtn.disabled = true;
+        sendBtn.innerHTML = '<span class="loader"></span> 진행중';
+        
+        ws.send(JSON.stringify({
+            action: "approve",
+            approve: approve,
+            session_id: currentSessionId
+        }));
+    }
+
+    function sendMessage() {
         const text = messageInput.value.trim();
         if (!text && selectedImages.length === 0) return;
+
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            appendMessage("서버와 연결되어 있지 않습니다.", "agent");
+            return;
+        }
 
         // UI 업데이트
         appendMessage(text || "이미지 전송", "user", selectedImages);
@@ -130,39 +226,12 @@
         sendBtn.disabled = true;
         sendBtn.innerHTML = '<span class="loader"></span> 전송중';
 
-        try {
-            const res = await fetch(API_URL, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    message: text || "이미지를 분석해줘.",
-                    images: currentImages,
-                    session_id: currentSessionId
-                })
-            });
-
-            if (!res.ok) throw new Error("서버 에러가 발생했습니다.");
-            const data = await res.json();
-            
-            if (data.session_id) {
-                currentSessionId = data.session_id;
-                localStorage.setItem('agent_session_id', data.session_id);
-            }
-            
-            if (data.status === "approval_required") {
-                appendMessage(`⚠️ 승인 필요: ${data.message}`, "agent");
-            } else {
-                appendMessage(data.message || "응답이 없습니다.", "agent");
-            }
-
-        } catch (error) {
-            appendMessage(`❌ 에러: ${error.message}`, "agent");
-        } finally {
-            sendBtn.disabled = false;
-            sendBtn.innerText = '전송';
-        }
+        ws.send(JSON.stringify({
+            action: "chat",
+            message: text || "이미지를 분석해줘.",
+            images: currentImages,
+            session_id: currentSessionId
+        }));
     }
 </script>
 </body>

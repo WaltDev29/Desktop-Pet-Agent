@@ -21,8 +21,7 @@ FastAPI 라우터 - 에이전트와 Web UI 간의 인터페이스를 제공합�
 import uuid
 import logging
 
-from fastapi import APIRouter, Cookie, Response
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
@@ -31,16 +30,14 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-
-class ChatRequest(BaseModel):
+class ChatPayload(BaseModel):
     message: str
     images: list[str] = []         # base64 인코딩된 이미지 문자열 리스트 (최대 3개 제한)
-    session_id: str | None = None  # 쿠키가 유실됐을 때를 대비한 이중 안전장치
+    session_id: str | None = None
 
-class ApprovalRequest(BaseModel):
+class ApprovePayload(BaseModel):
     approve: bool                  # True: 허용 / False: 거절
-    session_id: str | None = None  # 쿠키가 유실됐을 때를 대비한 이중 안전장치
-
+    session_id: str | None = None
 
 # ==========================================
 # 에이전트 지연 초기화 (순환 임포트 방지)
@@ -56,31 +53,21 @@ async def _get_or_create_agent():
 
 
 def _make_config(session_id: str) -> dict:
-    """
-    LangGraph 실행 설정을 생성합니다.
-    thread_id = "{user_id}:{session_id}" 형태로 구성합니다.
-
-    나중에 로그인 기능 도입 시, user_id를 JWT 토큰에서 추출하여 교체하세요.
-    예: user_id = get_current_user(request).id
-    """
     user_id = "default"  # MVP: 단일 사용자 고정
     return {"configurable": {"thread_id": f"{user_id}:{session_id}"}}
 
 
-def _initial_state(request: ChatRequest) -> dict:
-    """새 대화 턴 시작 시 전달할 초기 State를 반환합니다."""
-    # 이미지가 있는 경우 멀티모달 포맷으로 구성
-    if request.images:
-        content = [{"type": "text", "text": request.message}]
-        # 최대 3개까지만 제한
-        for img in request.images[:3]:
+def _initial_state(payload: ChatPayload) -> dict:
+    if payload.images:
+        content = [{"type": "text", "text": payload.message}]
+        for img in payload.images[:3]:
             content.append({"type": "image_url", "image_url": {"url": img}})
     else:
-        content = request.message
+        content = payload.message
 
     return {
         "messages":        [HumanMessage(content=content)],
-        "original_request": request.message, # Planner 및 Aggregator에서 사용할 순수 텍스트 요청
+        "original_request": payload.message,
         "plan":            [],
         "current_task":    "",
         "past_results":    [],
@@ -90,121 +77,104 @@ def _initial_state(request: ChatRequest) -> dict:
 
 
 # ==========================================
-# /chat
+# /ws
 # ==========================================
 
-@router.post("/chat")
-async def chat_endpoint(
-    request:    ChatRequest,
-    response:   Response,
-    session_id: str = Cookie(default=None),
-):
-    """
-    사용자 메시지를 받아 에이전트를 실행합니다.
-
-    - 일반 요청: 에이전트가 계획/실행/취합 후 최종 응답 반환
-    - 위험 도구 감지: interrupt()로 일시정지, approval_required 상태 반환
-    """
-    # 세션 ID 우선순위: 쿠키 → 요청 바디 → 신규 발급
-    # (httpx 쿠키 중계 과정에서 쿠키가 유실되더라도 바디의 session_id로 보완)
-    session_id = session_id or request.session_id or str(uuid.uuid4())
-    logger.info(f"[Chat] thread_id=default:{session_id[:8]}...")
-
-    # 쿠키 갱신 (응답마다 재세팅 → 만료 방지)
-    response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
-
-    agent  = await _get_or_create_agent()
-    config = _make_config(session_id)
-    state  = _initial_state(request)
+@router.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    logger.info("[WebSocket] 클라이언트 연결됨")
 
     try:
-        result = await agent.ainvoke(state, config=config)
+        while True:
+            data = await websocket.receive_json()
+            action = data.get("action")
 
-        # ---- 위험 도구로 인한 일시정지 ----
-        if "__interrupt__" in result:
-            interrupt_data = result["__interrupt__"][0].value
-            logger.info(f"[Chat] interrupt 발동: {interrupt_data['tool_name']}")
-            return JSONResponse(content={
-                "status":       "approval_required",
-                "message":      (
-                    f"⚠️ 위험한 작업 감지\n"
-                    f"도구: {interrupt_data['tool_name']}\n"
-                    f"내용: {interrupt_data['tool_args']}\n\n"
-                    f"실행을 허용하시겠습니까?"
-                ),
-                "tool_call_id": interrupt_data["tool_call_id"],
-            })
+            if action == "chat":
+                payload = ChatPayload(**data)
+                session_id = payload.session_id or str(uuid.uuid4())
+                logger.info(f"[WebSocket-Chat] thread_id=default:{session_id[:8]}...")
 
-        last_msg = result["messages"][-1]
-        return JSONResponse(content={"status": "success", "message": last_msg.content, "session_id": session_id})
+                agent = await _get_or_create_agent()
+                config = _make_config(session_id)
+                state = _initial_state(payload)
 
+                try:
+                    result = await agent.ainvoke(state, config=config)
+
+                    if "__interrupt__" in result:
+                        interrupt_data = result["__interrupt__"][0].value
+                        logger.info(f"[WebSocket-Chat] interrupt 발동: {interrupt_data['tool_name']}")
+                        await websocket.send_json({
+                            "status":       "approval_required",
+                            "message":      (
+                                f"⚠️ 위험한 작업 감지\n"
+                                f"도구: {interrupt_data['tool_name']}\n"
+                                f"내용: {interrupt_data['tool_args']}\n\n"
+                                f"실행을 허용하시겠습니까?"
+                            ),
+                            "tool_call_id": interrupt_data["tool_call_id"],
+                            "session_id": session_id,
+                        })
+                    else:
+                        last_msg = result["messages"][-1]
+                        await websocket.send_json({
+                            "status": "success", 
+                            "message": last_msg.content, 
+                            "session_id": session_id
+                        })
+                except Exception as e:
+                    import traceback
+                    trace = traceback.format_exc()
+                    logger.error(f"[WebSocket-Chat] 에이전트 실행 오류:\n{trace}")
+                    await websocket.send_json({"status": "error", "message": f"에이전트 실행 실패: {e}"})
+
+            elif action == "approve":
+                payload = ApprovePayload(**data)
+                session_id = payload.session_id
+                
+                if not session_id:
+                    await websocket.send_json({"status": "error", "message": "세션이 없습니다. 새로 대화를 시작해주세요."})
+                    continue
+                    
+                logger.info(f"[WebSocket-Approve] thread_id=default:{session_id[:8]}...")
+                
+                agent = await _get_or_create_agent()
+                config = _make_config(session_id)
+
+                try:
+                    result = await agent.ainvoke(Command(resume=payload.approve), config=config)
+
+                    if "__interrupt__" in result:
+                        interrupt_data = result["__interrupt__"][0].value
+                        await websocket.send_json({
+                            "status":       "approval_required",
+                            "message":      (
+                                f"⚠️ 또 다른 위험 작업이 감지되었습니다.\n"
+                                f"도구: {interrupt_data['tool_name']}\n"
+                                f"내용: {interrupt_data['tool_args']}"
+                            ),
+                            "tool_call_id": interrupt_data["tool_call_id"],
+                            "session_id": session_id,
+                        })
+                    else:
+                        last_msg = result["messages"][-1]
+                        status = "success" if payload.approve else "rejected"
+                        await websocket.send_json({
+                            "status": status, 
+                            "message": last_msg.content,
+                            "session_id": session_id
+                        })
+                except Exception as e:
+                    import traceback
+                    trace = traceback.format_exc()
+                    logger.error(f"[WebSocket-Approve] 재개 오류:\n{trace}")
+                    await websocket.send_json({"status": "error", "message": f"재개 중 오류 발생: {e}"})
+                    
+            else:
+                await websocket.send_json({"status": "error", "message": "알 수 없는 action 타입입니다."})
+
+    except WebSocketDisconnect:
+        logger.info("[WebSocket] 클라이언트 연결 종료")
     except Exception as e:
-        import traceback
-        trace = traceback.format_exc()
-        logger.error(f"[Chat] 에이전트 실행 오류:\n{trace}")
-        return JSONResponse(
-            content={"status": "error", "message": f"에이전트 실행 실패: {e}\n{trace}"},
-            status_code=500,
-        )
-
-
-# ==========================================
-# /approve
-# ==========================================
-
-@router.post("/approve")
-async def approve_endpoint(
-    request:    ApprovalRequest,
-    response:   Response,
-    session_id: str = Cookie(default=None),
-):
-    """
-    Web UI의 승인/거절 결과를 받아 중단된 에이전트를 재개합니다.
-
-    LangGraph의 Command(resume=bool)를 사용해 interrupt() 위치에서 정확히 재개합니다.
-    - approve=True  → Worker가 도구를 실행하고 계속 진행
-    - approve=False → Worker가 거절 메시지를 기록하고 다음 계획으로 복귀
-    """
-    # 세션 ID 우선순위: 쿠키 → 요청 바디 → 에러
-    session_id = session_id or request.session_id
-    if not session_id:
-        return JSONResponse(
-            content={"status": "error", "message": "세션이 없습니다. 새로 대화를 시작해주세요."},
-            status_code=400,
-        )
-    logger.info(f"[Approve] thread_id=default:{session_id[:8]}...")
-
-    response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
-
-    agent  = await _get_or_create_agent()
-    config = _make_config(session_id)
-
-    try:
-        # Command(resume=True/False) → interrupt() 위치에서 재개
-        result = await agent.ainvoke(Command(resume=request.approve), config=config)
-
-        # 재개 후 또 다른 위험 도구가 등장한 경우
-        if "__interrupt__" in result:
-            interrupt_data = result["__interrupt__"][0].value
-            return JSONResponse(content={
-                "status":       "approval_required",
-                "message":      (
-                    f"⚠️ 또 다른 위험 작업이 감지되었습니다.\n"
-                    f"도구: {interrupt_data['tool_name']}\n"
-                    f"내용: {interrupt_data['tool_args']}"
-                ),
-                "tool_call_id": interrupt_data["tool_call_id"],
-            })
-
-        last_msg = result["messages"][-1]
-        status   = "success" if request.approve else "rejected"
-        return JSONResponse(content={"status": status, "message": last_msg.content})
-
-    except Exception as e:
-        import traceback
-        trace = traceback.format_exc()
-        logger.error(f"[Approve] 재개 오류:\n{trace}")
-        return JSONResponse(
-            content={"status": "error", "message": f"재개 중 오류 발생: {e}"},
-            status_code=500,
-        )
+        logger.error(f"[WebSocket] 예기치 않은 오류 발생: {e}")

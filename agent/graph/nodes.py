@@ -77,11 +77,16 @@ def make_planner_node(llm: Runnable):
                         original_request = " ".join(t.strip() for t in texts if t.strip())
                     break
 
-        # 이미지 존재 여부 확인 및 플래너 힌트 생성
+        # 이미지 존재 여부 확인 및 플래너 힌트 생성 (최근 사용자 메시지만 확인)
         image_count = 0
-        for m in state["messages"]:
-            if isinstance(m, HumanMessage) and isinstance(m.content, list):
-                image_count += sum(1 for item in m.content if isinstance(item, dict) and item.get("type") == "image_url")
+        last_human_msg = None
+        for m in reversed(state["messages"]):
+            if isinstance(m, HumanMessage):
+                last_human_msg = m
+                break
+        
+        if getattr(last_human_msg, "content", None) and isinstance(last_human_msg.content, list):
+            image_count += sum(1 for item in last_human_msg.content if isinstance(item, dict) and item.get("type") == "image_url")
         
         hint = f"\n\n[System Hint: User has uploaded {image_count} image(s).]" if image_count > 0 else ""
         
@@ -181,14 +186,20 @@ def _build_worker_messages(state: AgentState, system_prompt: str, include_images
         )),
     ]
 
-    # 사용자가 직접 업로드한 이미지 포함 (Vision Worker 등에서 필요)
+    # 사용자가 직접 업로드한 이미지 포함 (최근 사용자 메시지만 확인)
     if include_images:
         user_images = []
-        for msg in state["messages"]:
-            if isinstance(msg, HumanMessage) and isinstance(msg.content, list):
-                for item in msg.content:
-                    if isinstance(item, dict) and item.get("type") == "image_url":
-                        user_images.append(item)
+        last_human_msg = None
+        for msg in reversed(state["messages"]):
+            if isinstance(msg, HumanMessage):
+                last_human_msg = msg
+                break
+                
+        if getattr(last_human_msg, "content", None) and isinstance(last_human_msg.content, list):
+            for item in last_human_msg.content:
+                if isinstance(item, dict) and item.get("type") == "image_url":
+                    user_images.append(item)
+
         if user_images:
             msgs.append(HumanMessage(content=user_images))
 
@@ -420,11 +431,16 @@ def make_aggregator_node(llm: Runnable):
         if chat_history:
             msgs.extend(chat_history)
 
-        # ---- 이미지 존재 여부 힌트 (Aggregator 인지력 강화) ----
+        # ---- 이미지 존재 여부 힌트 (Aggregator 인지력 강화, 최근 사용자 메시지만 확인) ----
         image_count = 0
-        for m in state["messages"]:
-            if isinstance(m, HumanMessage) and isinstance(m.content, list):
-                image_count += sum(1 for item in m.content if isinstance(item, dict) and item.get("type") == "image_url")
+        last_human_msg = None
+        for m in reversed(state["messages"]):
+            if isinstance(m, HumanMessage):
+                last_human_msg = m
+                break
+        
+        if getattr(last_human_msg, "content", None) and isinstance(last_human_msg.content, list):
+            image_count += sum(1 for item in last_human_msg.content if isinstance(item, dict) and item.get("type") == "image_url")
         
         image_hint = f"\n(Note: User has uploaded {image_count} image(s). Relevant analysis is in the Worker Results above.)" if image_count > 0 else ""
 
