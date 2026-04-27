@@ -100,10 +100,37 @@ async def websocket_endpoint(websocket: WebSocket):
                 state = _initial_state(payload)
 
                 try:
-                    result = await agent.ainvoke(state, config=config)
+                    async for event in agent.astream_events(state, config=config, version="v2"):
+                        kind = event["event"]
+                        
+                        if kind == "on_chain_start":
+                            node_name = event.get("name", "")
+                            metadata = event.get("metadata", {})
+                            langgraph_node = metadata.get("langgraph_node", "")
+                            
+                            # langgraph_node 메타데이터가 존재하고 이벤트 이름과 일치할 때(최상위 노드)만
+                            if langgraph_node and langgraph_node == node_name and not node_name.startswith("__") and node_name != "tools":
+                                await websocket.send_json({"status": "node_start", "node": node_name})
+                                
+                        elif kind == "on_chat_model_stream":
+                            chunk = event["data"].get("chunk")
+                            if chunk:
+                                content = chunk.content
+                                if isinstance(content, str) and content:
+                                    await websocket.send_json({"status": "stream_chunk", "chunk": content})
 
-                    if "__interrupt__" in result:
-                        interrupt_data = result["__interrupt__"][0].value
+                        elif kind == "on_tool_start":
+                            tool_name = event.get("name", "")
+                            tool_input = event["data"].get("input", "")
+                            await websocket.send_json({
+                                "status": "tool_start",
+                                "tool_name": tool_name,
+                                "tool_input": tool_input
+                            })
+
+                    final_state = agent.get_state(config)
+                    if final_state.tasks and len(final_state.tasks) > 0 and final_state.tasks[0].interrupts:
+                        interrupt_data = final_state.tasks[0].interrupts[0].value
                         logger.info(f"[WebSocket-Chat] interrupt 발동: {interrupt_data['tool_name']}")
                         await websocket.send_json({
                             "status":       "approval_required",
@@ -117,10 +144,8 @@ async def websocket_endpoint(websocket: WebSocket):
                             "session_id": session_id,
                         })
                     else:
-                        last_msg = result["messages"][-1]
                         await websocket.send_json({
-                            "status": "success", 
-                            "message": last_msg.content, 
+                            "status": "stream_end", 
                             "session_id": session_id
                         })
                 except Exception as e:
@@ -143,10 +168,37 @@ async def websocket_endpoint(websocket: WebSocket):
                 config = _make_config(session_id)
 
                 try:
-                    result = await agent.ainvoke(Command(resume=payload.approve), config=config)
+                    async for event in agent.astream_events(Command(resume=payload.approve), config=config, version="v2"):
+                        kind = event["event"]
+                        
+                        if kind == "on_chain_start":
+                            node_name = event.get("name", "")
+                            metadata = event.get("metadata", {})
+                            langgraph_node = metadata.get("langgraph_node", "")
+                            
+                            # langgraph_node 메타데이터가 존재하고 이벤트 이름과 일치할 때(최상위 노드)만
+                            if langgraph_node and langgraph_node == node_name and not node_name.startswith("__") and node_name != "tools":
+                                await websocket.send_json({"status": "node_start", "node": node_name})
+                                
+                        elif kind == "on_chat_model_stream":
+                            chunk = event["data"].get("chunk")
+                            if chunk:
+                                content = chunk.content
+                                if isinstance(content, str) and content:
+                                    await websocket.send_json({"status": "stream_chunk", "chunk": content})
 
-                    if "__interrupt__" in result:
-                        interrupt_data = result["__interrupt__"][0].value
+                        elif kind == "on_tool_start":
+                            tool_name = event.get("name", "")
+                            tool_input = event["data"].get("input", "")
+                            await websocket.send_json({
+                                "status": "tool_start",
+                                "tool_name": tool_name,
+                                "tool_input": tool_input
+                            })
+
+                    final_state = agent.get_state(config)
+                    if final_state.tasks and len(final_state.tasks) > 0 and final_state.tasks[0].interrupts:
+                        interrupt_data = final_state.tasks[0].interrupts[0].value
                         await websocket.send_json({
                             "status":       "approval_required",
                             "message":      (
@@ -158,11 +210,8 @@ async def websocket_endpoint(websocket: WebSocket):
                             "session_id": session_id,
                         })
                     else:
-                        last_msg = result["messages"][-1]
-                        status = "success" if payload.approve else "rejected"
                         await websocket.send_json({
-                            "status": status, 
-                            "message": last_msg.content,
+                            "status": "stream_end", 
                             "session_id": session_id
                         })
                 except Exception as e:
