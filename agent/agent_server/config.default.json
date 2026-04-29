@@ -1,0 +1,36 @@
+{
+  "mcp": {
+    "windows_mcp": {
+      "enabled": true,
+      "python_path": ""
+    },
+    "workspace_mcp": {
+      "enabled": true,
+      "exe_path": "",
+      "tools": [
+        "gmail",
+        "calendar",
+        "drive",
+        "docs",
+        "sheets"
+      ],
+      "oauth_callback_port": "8003"
+    },
+    "email_mcp": {
+      "enabled": true,
+      "exe_path": "",
+      "account_name": "default",
+      "full_name": "",
+      "email_address": "",
+      "password": "",
+      "imap_host": "imap.도메인.com",
+      "imap_port": "993",
+      "smtp_host": "smtp.도메인.com",
+      "smtp_port": "465",
+      "enable_attachment_download": "false"
+    },
+    "notion_mcp": {
+      "enabled": true
+    }
+  }
+}

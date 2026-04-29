@@ -77,3 +77,6 @@ dmypy.json
 # MacOS
 .DS_Store
 
+# config
+agent/agent_server/config.json
+

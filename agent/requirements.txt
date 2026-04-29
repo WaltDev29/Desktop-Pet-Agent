@@ -1,0 +1,17 @@
+# mcp 환경 신규 추가 패키지
+# 설치: conda activate mcp → pip install -r requirements.txt
+#
+# 테스트 후 버전 확인 방법:
+#   pip show workspace-mcp mcp-email-server
+# 확인된 버전을 mcp/environment.yml의 pip 섹션에 추가하세요.
+ 
+# ============ Google Workspace (Gmail, Calendar, Drive 등) ============
+workspace-mcp
+ 
+# ============ 범용 이메일 (SMTP/IMAP) ============
+mcp-email-server
+ 
+# ============ Notion ============
+# 별도 패키지 설치 불필요.
+# Notion 공식 원격 MCP (https://mcp.notion.com/sse) 를 SSE로 직접 연결합니다.
+ 
