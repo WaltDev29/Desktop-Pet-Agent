@@ -1,6 +1,15 @@
 import logging
+import os
+from pathlib import Path
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+# 환경변수 로드
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
+logger = logging.getLogger(__name__)
+logger.info(f"[Server] 환경 변수 로드 완료. API_SERVER: {os.getenv('API_SERVER')}")
 from .router import router
 
 # 기본적인 로깅 설정

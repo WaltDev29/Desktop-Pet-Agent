@@ -8,7 +8,7 @@ load_dotenv(BASE_DIR / ".env")
 
 MCP_TRANSPORT = os.getenv("MCP_TRANSPORT", "stdio").lower()
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://127.0.0.1:8002/sse")
-MCP_PATH = os.getenv("MCP_PATH", r"C:\Users\AISW-509-202\anaconda3\envs\mcp\python.exe")
+MCP_PATH = os.getenv("MCP_PATH", "")
 
 MCP_MAIN_SCRIPT = os.path.join(BASE_DIR.parent, "MCP_server", "main.py")
 

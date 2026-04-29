@@ -49,7 +49,7 @@ class ExecutionPlan(BaseModel):
 DANGEROUS_TOOLS = ["write_file_tool", "delete_file_tool"]
 
 # Worker 1회 태스크당 최대 도구 호출 횟수 (무한 루프 방지)
-MAX_TOOL_CALLS = 10
+MAX_TOOL_CALLS = 15
 
 # ==========================================
 # 1. Planner Node
@@ -61,7 +61,7 @@ def make_planner_node(llm: Runnable):
     """
     planner_llm = llm.with_structured_output(ExecutionPlan)
 
-    def planner_node(state: AgentState):
+    async def planner_node(state: AgentState):
         # 가장 마지막 HumanMessage를 원본 요청으로 저장 (Aggregator에서 정확하게 참조)
         chat_history = _get_plain_chat_history(state["messages"])
         original_request = state.get("original_request", "")
@@ -97,7 +97,7 @@ def make_planner_node(llm: Runnable):
 
         try:
             # Pydantic 모델을 사용해 직접 객체로 수신 (파싱 에러 해결)
-            res_obj: ExecutionPlan = planner_llm.invoke(input_msgs)
+            res_obj: ExecutionPlan = await planner_llm.ainvoke(input_msgs)
             plan = res_obj.plan if res_obj and res_obj.plan else []
         except Exception as e:
             logger.error(f"[Planner] 구조화 출력 생성 실패: {e!r}")
@@ -123,7 +123,7 @@ def make_master_router_node(llm: Runnable):
     """
     router_llm = llm.with_structured_output(WorkerDecision)
 
-    def master_router_node(state: AgentState):
+    async def master_router_node(state: AgentState):
         plan = state.get("plan", [])
         if not plan:
             # 모든 계획 완료 → Aggregator로
@@ -132,7 +132,7 @@ def make_master_router_node(llm: Runnable):
         current_task = plan[0]
         remaining_plan = plan[1:]
 
-        decision: WorkerDecision = router_llm.invoke([
+        decision: WorkerDecision = await router_llm.ainvoke([
             SystemMessage(content=ROUTER_PROMPT),
             HumanMessage(content=current_task),
         ])
@@ -176,7 +176,7 @@ def _get_plain_chat_history(messages: list) -> list:
                 chat_history.append(msg)
     return chat_history
 
-def _build_worker_messages(state: AgentState, system_prompt: str, include_images: bool = False) -> list:
+async def _build_worker_messages(state: AgentState, system_prompt: str, include_images: bool = False) -> list:
     """Worker LLM에 전달할 메시지 목록을 구성합니다."""
     msgs = [
         SystemMessage(content=system_prompt),
@@ -186,30 +186,53 @@ def _build_worker_messages(state: AgentState, system_prompt: str, include_images
         )),
     ]
 
-    # 사용자가 직접 업로드한 이미지 포함 (최근 사용자 메시지만 확인)
+    # 사용자가 직접 업로드한 이미지 포함 (상태에 담긴 식별 URL을 기반으로 구성)
     if include_images:
+        import time
+        from utils.storage import refresh_image_url
         user_images = []
-        last_human_msg = None
-        for msg in reversed(state["messages"]):
-            if isinstance(msg, HumanMessage):
-                last_human_msg = msg
-                break
+        uploaded_files = state.get("uploaded_images", [])
+        active_uuids = state.get("active_image_uuids", [])
+
+        # 필터링: 이번 턴에 새로 올라온 이미지가 있다면 그것만 사용, 없으면(과거 이미지 질문) 전체 사용
+        if active_uuids:
+            target_files = [f for f in uploaded_files if isinstance(f, dict) and f.get("uuid") in active_uuids]
+        else:
+            target_files = uploaded_files
+
+        for item in target_files:
+            if isinstance(item, dict):
+                url = item.get("url", "")
+                uuid_val = item.get("uuid")
+                sid = item.get("session_id", "default")
                 
-        if getattr(last_human_msg, "content", None) and isinstance(last_human_msg.content, list):
-            for item in last_human_msg.content:
-                if isinstance(item, dict) and item.get("type") == "image_url":
-                    user_images.append(item)
+                # 50분(3000초) 이상 경과 시 URL 갱신
+                if item.get("uploaded_at") and time.time() - item["uploaded_at"] > 3000:
+                    try:
+                        new_url = await refresh_image_url("default", sid, uuid_val)
+                        if new_url:
+                            url = new_url
+                            item["url"] = new_url # 상태에도 반영해 다음에 또 갱신하지 않도록 함
+                            item["uploaded_at"] = time.time()
+                    except Exception as e:
+                        logger.error(f"[build_messages] URL 갱신 실패: {e}")
+                        
+                if url:
+                    user_images.append({"type": "image_url", "image_url": {"url": url}})
+            elif isinstance(item, str): # 호환성 처리 (이전 버전 문자열 데이터)
+                user_images.append({"type": "image_url", "image_url": {"url": item}})
 
         if user_images:
             msgs.append(HumanMessage(content=user_images))
 
-    # 최근 도구 호출 / 결과 메시지 덧붙이기
+    # 현재 서브태스크 내에서 발생한 모든 도구 호출/결과 메시지 덧붙이기
+    # (에이전트가 이전에 한 작업을 잊어버리고 무한 루프에 빠지는 것을 방지)
     recent = []
     for msg in reversed(state["messages"]):
-        if isinstance(msg, ToolMessage):
+        if isinstance(msg, ToolMessage) or getattr(msg, "tool_calls", None):
             recent.insert(0, msg)
-        elif getattr(msg, "tool_calls", None):
-            recent.insert(0, msg)
+        else:
+            # 도구 관련이 아닌 메시지(HumanMessage, 일반 AIMessage 등)를 만나면 중단
             break
     return msgs + recent
 
@@ -221,8 +244,8 @@ def _build_worker_messages(state: AgentState, system_prompt: str, include_images
 # ==========================================
 
 def _make_base_worker(llm_with_tools: Runnable, system_prompt: str, worker_label: str, postprocess=None):
-    def worker_node(state: AgentState):
-        msgs = _build_worker_messages(state, system_prompt)
+    async def worker_node(state: AgentState):
+        msgs = await _build_worker_messages(state, system_prompt)
         if postprocess:
             msgs = postprocess(msgs)
 
@@ -289,7 +312,7 @@ def _make_base_worker(llm_with_tools: Runnable, system_prompt: str, worker_label
                 "tool_call_count": 0,
             }
 
-        response = llm_with_tools.invoke(msgs)
+        response = await llm_with_tools.ainvoke(msgs)
 
         if response.tool_calls:
             logger.info(f"[{worker_label}] Tool Calls requested: {response.tool_calls}")
@@ -367,10 +390,10 @@ def make_windows_mcp_worker(llm_with_tools: Runnable):
 
 def make_vision_worker(llm: Runnable):
     """사용자가 업로드한 이미지를 분석하는 전용 Worker."""
-    def vision_worker_node(state: AgentState):
-        msgs = _build_worker_messages(state, VISION_WORKER_PROMPT, include_images=True)
+    async def vision_worker_node(state: AgentState):
+        msgs = await _build_worker_messages(state, VISION_WORKER_PROMPT, include_images=True)
         
-        response = llm.invoke(msgs)
+        response = await llm.ainvoke(msgs)
         final_answer = getattr(response, "content", "No content")
         logger.info(f"[Vision Worker] Task completed: {str(final_answer)[:50]}...")
         
@@ -397,7 +420,7 @@ def make_aggregator_node(llm: Runnable):
 
     Worker 내부 메시지(ToolMessage, tool_calls 포함 AIMessage)는 대화 맥락과 무관하므로 제외합니다.
     """
-    def aggregator_node(state: AgentState):
+    async def aggregator_node(state: AgentState):
         from langchain_core.messages import AIMessage
 
         original_request = state.get("original_request")
@@ -459,7 +482,7 @@ def make_aggregator_node(llm: Runnable):
             )
         msgs.append(HumanMessage(content=final_prompt))
 
-        response = llm.invoke(msgs)
+        response = await llm.ainvoke(msgs)
         final_reply = getattr(response, "content", "")
         logger.info(f"[Aggregator] Final response: {final_reply}")
         return {"messages": [response]}

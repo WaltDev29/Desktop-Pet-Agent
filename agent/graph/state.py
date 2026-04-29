@@ -29,3 +29,12 @@ class AgentState(TypedDict):
     # Worker의 무한 도구 호출 루프를 방지하기 위한 카운터.
     # Router가 새 태스크를 배정할 때마다 0으로 초기화합니다.
     tool_call_count: int
+
+    # ============ uploaded_images ============
+    # 사용자가 업로드한 이미지들의 저장소 데이터 목록.
+    # 각 요소는 {"url": str, "uuid": str, "uploaded_at": float} 형태를 띱니다.
+    uploaded_images: Annotated[List[dict], operator.add]
+
+    # ============ active_image_uuids ============
+    # 현재 턴에서 분석 대상이 되는 이미지들의 UUID 목록 (필터링용).
+    active_image_uuids: List[str]

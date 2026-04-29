@@ -224,18 +224,30 @@
 
 <body>
 
-    <div id="chat-container">
-        <div id="chat-box">
-            <div class="message agent">안녕하세요! 에이전트입니다. 궁금한 점이 있거나 이미지를 분석해보고 싶으시면 말씀해주세요.</div>
+    <div id="main-layout" style="display: flex; gap: 20px; width: 100%; max-width: 900px; height: 80vh;">
+        <!-- Sidebar for Sessions -->
+        <div id="sidebar" style="width: 250px; background-color: #2a2a2a; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 10px;">
+            <button onclick="createNewSession()" style="background-color: #28a745; width: 100%;">새 대화 시작 ➕</button>
+            <button onclick="deleteCurrentSession()" style="background-color: #dc3545; width: 100%;">현재 세션 삭제 🗑️</button>
+            <hr style="border-color: #444; width: 100%;">
+            <div id="session-list" style="display: flex; flex-direction: column; gap: 8px; overflow-y: auto; flex-grow: 1;">
+                <!-- 세션 리스트 렌더링 영역 -->
+            </div>
         </div>
-        <div id="input-container">
-            <div id="image-preview-container"></div>
-            <div class="input-row">
-                <button class="upload-btn" onclick="document.getElementById('file-input').click()">업로드 🖼️</button>
-                <input type="file" id="file-input" accept="image/*" multiple>
-                <input type="text" id="message-input" placeholder="메시지를 입력하세요..."
-                    onkeypress="if(event.key === 'Enter') sendMessage()">
-                <button id="send-btn" onclick="sendMessage()">전송</button>
+
+        <div id="chat-container" style="flex-grow: 1; max-width: 600px; height: 100%;">
+            <div id="chat-box" style="max-height: calc(100% - 130px);">
+                <div class="message agent">안녕하세요! 에이전트입니다. 궁금한 점이 있거나 이미지를 분석해보고 싶으시면 말씀해주세요.</div>
+            </div>
+            <div id="input-container">
+                <div id="image-preview-container"></div>
+                <div class="input-row">
+                    <button class="upload-btn" onclick="document.getElementById('file-input').click()">업로드 🖼️</button>
+                    <input type="file" id="file-input" accept="image/*" multiple>
+                    <input type="text" id="message-input" placeholder="메시지를 입력하세요..."
+                        onkeypress="if(event.key === 'Enter') sendMessage()">
+                    <button id="send-btn" onclick="sendMessage()">전송</button>
+                </div>
             </div>
         </div>
     </div>
@@ -250,10 +262,67 @@
 
         let selectedImages = []; // base64 strings
         let currentSessionId = localStorage.getItem('agent_session_id');
+        let sessionList = JSON.parse(localStorage.getItem('agent_sessions_list') || "[]");
         let ws = null;
         let currentMessageDiv = null;
         let thoughtLogDiv = null;
         let finalResponseDiv = null;
+
+        // 세션 리스트 UI 갱신 로직 추가
+        function updateSessionStorage() {
+            if (currentSessionId && !sessionList.includes(currentSessionId)) {
+                sessionList.push(currentSessionId);
+            }
+            localStorage.setItem('agent_sessions_list', JSON.stringify(sessionList));
+            renderSessionList();
+        }
+
+        function renderSessionList() {
+            const listDiv = document.getElementById('session-list');
+            listDiv.innerHTML = '';
+            sessionList.forEach(sid => {
+                const btn = document.createElement('button');
+                btn.innerText = "세션: " + sid.substring(0, 6) + "...";
+                btn.style.width = "100%";
+                btn.style.textAlign = "left";
+                btn.style.backgroundColor = (sid === currentSessionId) ? "#4a90e2" : "#444";
+                btn.onclick = () => {
+                    currentSessionId = sid;
+                    localStorage.setItem('agent_session_id', sid);
+                    chatBox.innerHTML = '<div class="message agent">기존 세션('+sid.substring(0,6)+')으로 전환되었습니다.<br>(현재 UI MVP 특성상 지난 대화 로그는 불러오지 않지만 백엔드 메모리는 연결되었습니다)</div>';
+                    renderSessionList();
+                };
+                listDiv.appendChild(btn);
+            });
+        }
+        
+        function createNewSession() {
+            currentSessionId = crypto.randomUUID();
+            localStorage.setItem('agent_session_id', currentSessionId);
+            chatBox.innerHTML = '<div class="message agent">새로운 대화 세션이 시작되었습니다.</div>';
+            updateSessionStorage();
+        }
+        
+        function deleteCurrentSession() {
+            if (!currentSessionId) return;
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    action: "delete_session",
+                    session_id: currentSessionId
+                }));
+            }
+            sessionList = sessionList.filter(s => s !== currentSessionId);
+            localStorage.setItem('agent_sessions_list', JSON.stringify(sessionList));
+            
+            chatBox.innerHTML = '<div class="message agent">진행 중이던 세션이 완전히 폐기되었습니다. 우측 상단에서 새 대화를 시작해주세요.</div>';
+            currentSessionId = sessionList.length > 0 ? sessionList[sessionList.length - 1] : null;
+            if (currentSessionId) localStorage.setItem('agent_session_id', currentSessionId);
+            else localStorage.removeItem('agent_session_id');
+            renderSessionList();
+        }
+
+        renderSessionList();
+
         function connectWebSocket() {
             ws = new WebSocket(API_URL);
 
@@ -267,6 +336,7 @@
                 if (data.session_id) {
                     currentSessionId = data.session_id;
                     localStorage.setItem('agent_session_id', data.session_id);
+                    updateSessionStorage();
                 }
 
                 if (data.status === "approval_required") {

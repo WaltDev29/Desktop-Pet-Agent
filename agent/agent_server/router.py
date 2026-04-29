@@ -57,13 +57,25 @@ def _make_config(session_id: str) -> dict:
     return {"configurable": {"thread_id": f"{user_id}:{session_id}"}}
 
 
-def _initial_state(payload: ChatPayload) -> dict:
+async def _initial_state(payload: ChatPayload, session_id: str, existing_images: list = None) -> dict:
+    from utils.storage import upload_image
+    
+    if existing_images is None:
+        existing_images = []
+        
+    new_uploaded_urls = []
     if payload.images:
-        content = [{"type": "text", "text": payload.message}]
         for img in payload.images[:3]:
-            content.append({"type": "image_url", "image_url": {"url": img}})
-    else:
-        content = payload.message
+            # 업로드 수행 후 반환된 식별용 URL 저장
+            url_data = await upload_image(img, "default", session_id)
+            new_uploaded_urls.append(url_data)
+            
+    # LLM 메인 프롬프트에는 이미지 본문을 넣지 않음 (순수 텍스트만)
+    content = payload.message
+    total_image_count = len(existing_images) + len(new_uploaded_urls)
+    
+    if total_image_count > 0:
+        content += f"\n\n[첨부된 이미지: {total_image_count}장]"
 
     return {
         "messages":        [HumanMessage(content=content)],
@@ -73,6 +85,8 @@ def _initial_state(payload: ChatPayload) -> dict:
         "past_results":    [],
         "active_worker":   "",
         "tool_call_count": 0,
+        "uploaded_images": new_uploaded_urls, # operator.add에 의해 기존 이미지와 합쳐짐
+        "active_image_uuids": [img["uuid"] for img in new_uploaded_urls], # 이번 턴에 올라온 것들만 마킹
     }
 
 
@@ -97,10 +111,15 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 agent = await _get_or_create_agent()
                 config = _make_config(session_id)
-                state = _initial_state(payload)
+                
+                # 기존 상태 확인 (이전 대화에서 올린 이미지가 있는지 파악)
+                current_state = agent.get_state(config)
+                existing_images = current_state.values.get("uploaded_images", []) if current_state.values else []
+                
+                state = await _initial_state(payload, session_id, existing_images)
 
                 try:
-                    async for event in agent.astream_events(state, config=config, version="v2"):
+                    async for event in agent.astream_events(state, config={**config, "recursion_limit": 50}, version="v2"):
                         kind = event["event"]
                         
                         if kind == "on_chain_start":
@@ -168,7 +187,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 config = _make_config(session_id)
 
                 try:
-                    async for event in agent.astream_events(Command(resume=payload.approve), config=config, version="v2"):
+                    async for event in agent.astream_events(Command(resume=payload.approve), config={**config, "recursion_limit": 50}, version="v2"):
                         kind = event["event"]
                         
                         if kind == "on_chain_start":
@@ -219,6 +238,15 @@ async def websocket_endpoint(websocket: WebSocket):
                     trace = traceback.format_exc()
                     logger.error(f"[WebSocket-Approve] 재개 오류:\n{trace}")
                     await websocket.send_json({"status": "error", "message": f"재개 중 오류 발생: {e}"})
+                    
+            elif action == "delete_session":
+                payload = data.get("session_id")
+                if payload:
+                    from utils.storage import delete_session_images
+                    await delete_session_images("default", payload)
+                    await websocket.send_json({"status": "success", "message": f"세션 {payload} 이미지 기록 삭제 완료."})
+                else:
+                    await websocket.send_json({"status": "error", "message": "session_id가 없습니다."})
                     
             else:
                 await websocket.send_json({"status": "error", "message": "알 수 없는 action 타입입니다."})
