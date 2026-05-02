@@ -28,6 +28,7 @@ from prompts.agents_prompts import (
     ROUTER_PROMPT,
     VISION_WORKER_PROMPT,
     WINDOWS_MCP_WORKER_PROMPT,
+    EXTERNAL_MCP_WORKER_PROMPT,
     AGGREGATOR_PROMPT,
 )
 
@@ -39,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 # Structured Output 모델: Master Router가 반환할 worker 이름
 class WorkerDecision(BaseModel):
-    worker: Literal["vision_worker", "windows_mcp_worker"]
+    worker: Literal["vision_worker", "windows_mcp_worker", "external_mcp_worker"]
 
 # 실행 계획 모델
 class ExecutionPlan(BaseModel):
@@ -385,7 +386,20 @@ def make_windows_mcp_worker(llm_with_tools: Runnable):
 
 
 # ==========================================
-# 3-2. Vision Worker Node
+# 3-2. External MCP Worker Node
+# ==========================================
+
+def make_external_mcp_worker(llm_with_tools: Runnable):
+    """외부 서비스(Workspace, Notion, Email 등)를 담당하는 Worker."""
+    return _make_base_worker(
+        llm_with_tools,
+        system_prompt=EXTERNAL_MCP_WORKER_PROMPT,
+        worker_label="external_mcp_worker",
+    )
+
+
+# ==========================================
+# 3-3. Vision Worker Node
 # ==========================================
 
 def make_vision_worker(llm: Runnable):
@@ -498,10 +512,10 @@ def route_planner(state: AgentState) -> Literal["master_router", "aggregator"]:
     return "master_router" if state.get("plan") else "aggregator"
 
 
-def route_master_router(state: AgentState) -> Literal["vision_worker", "windows_mcp_worker", "aggregator"]:
+def route_master_router(state: AgentState) -> Literal["vision_worker", "windows_mcp_worker", "external_mcp_worker", "aggregator"]:
     """Router가 선택한 worker로 이동. active_worker가 없으면 모든 계획 완료."""
     worker = state.get("active_worker", "")
-    if worker in ("vision_worker", "windows_mcp_worker"):
+    if worker in ("vision_worker", "windows_mcp_worker", "external_mcp_worker"):
         return worker
     return "aggregator"
 
@@ -518,12 +532,12 @@ def route_worker(state: AgentState) -> Literal["tools", "master_router"]:
     return "master_router"
 
 
-def route_tools(state: AgentState) -> Literal["vision_worker", "windows_mcp_worker"]:
+def route_tools(state: AgentState) -> Literal["vision_worker", "windows_mcp_worker", "external_mcp_worker"]:
     """도구 실행 완료 후 original_request한 Worker로 정확히 복귀."""
     return state.get("active_worker", "windows_mcp_worker")
 
 
-def route_entry(state: AgentState) -> Literal["planner", "master_router", "vision_worker", "windows_mcp_worker"]:
+def route_entry(state: AgentState) -> Literal["planner", "master_router", "vision_worker", "windows_mcp_worker", "external_mcp_worker"]:
 
     """
     진입점 라우터.

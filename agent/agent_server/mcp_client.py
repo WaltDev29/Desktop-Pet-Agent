@@ -36,21 +36,34 @@ _mcp_client = None
 
 
 async def get_mcp_tools():
-    """활성화된 MCP 서버들의 Tools를 반환합니다."""
-    global _mcp_client
+    """모든 MCP 서버들의 Tools를 합쳐서 반환합니다."""
+    win, ext = await get_categorized_mcp_tools()
+    return win + ext
 
-    if _mcp_client is not None:
-        return await _mcp_client.get_tools()
 
+async def get_categorized_mcp_tools():
+    """
+    Windows MCP 도구와 외부(External) MCP 도구를 분리하여 반환합니다.
+    Returns: (windows_tools, external_tools)
+    """
     mcp_config = await _build_config()
+    
+    # 1. Windows 전용 설정
+    win_cfg = {k: v for k, v in mcp_config.items() if k == "windows-mcp"}
+    # 2. 그 외 (Workspace, Email, Notion, DesktopPet 등) 설정
+    ext_cfg = {k: v for k, v in mcp_config.items() if k != "windows-mcp"}
 
-    if not mcp_config:
-        logger.warning("[MCP Client] 활성화된 MCP 서버가 없습니다.")
-        return []
+    win_tools = []
+    if win_cfg:
+        win_client = MultiServerMCPClient(win_cfg)
+        win_tools = await win_client.get_tools()
 
-    logger.info(f"[MCP Client] 연결 서버: {list(mcp_config.keys())}")
-    _mcp_client = MultiServerMCPClient(mcp_config)
-    return await _mcp_client.get_tools()
+    ext_tools = []
+    if ext_cfg:
+        ext_client = MultiServerMCPClient(ext_cfg)
+        ext_tools = await ext_client.get_tools()
+
+    return win_tools, ext_tools
 
 
 def get_mcp_client():
@@ -120,6 +133,7 @@ def _register_workspace_mcp(config: dict) -> None:
 
     tools = cfg.get("mcp.workspace_mcp.tools", ["gmail", "calendar"])
     port  = str(cfg.get("mcp.workspace_mcp.oauth_callback_port", "8003"))
+    google_email = cfg.get("mcp.workspace_mcp.user_google_email", "")
 
     config["workspace-mcp"] = {
         "command": exe_path,
@@ -128,8 +142,11 @@ def _register_workspace_mcp(config: dict) -> None:
         "env": {
             "GOOGLE_OAUTH_CLIENT_ID":      client_id,
             "GOOGLE_OAUTH_CLIENT_SECRET":  client_secret,
+            "USER_GOOGLE_EMAIL":           google_email,
             "OAUTHLIB_INSECURE_TRANSPORT": "1",
             "PORT":                        port,
+            "WORKSPACE_MCP_PORT":          port,
+            "GOOGLE_OAUTH_REDIRECT_URI":   f"http://localhost:{port}/oauth2callback"
         },
     }
     logger.info(f"[MCP] workspace-mcp 등록 (tools={tools})")
