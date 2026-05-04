@@ -84,17 +84,23 @@ class BubbleFrame(QFrame):
         super().mouseReleaseEvent(event)
 
     def paintEvent(self, event):
+        """말풍선 배경을 그리고 마우스 이벤트를 받기 위한 투명 레이어를 생성합니다."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
+
+        # 투명 영역 클릭을 감지하기 위해 아주 미세한 알파값(1)을 가진 배경을 채움
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 1))
         
         rect = self.rect()
         tail_height = 15
         tail_width = 20
         radius = 15
         
+        # 실제 말풍선 본체 영역 (상하좌우 1px씩 여백)
         body_rect = QRectF(1, 1, rect.width() - 2, rect.height() - tail_height - 2)
         
         path = QPainterPath()
+        # 말풍선 상단 및 측면 그리기
         path.moveTo(body_rect.left() + radius, body_rect.top())
         path.lineTo(body_rect.right() - radius, body_rect.top())
         path.arcTo(body_rect.right() - 2*radius, body_rect.top(), 2*radius, 2*radius, 90, -90)
@@ -102,11 +108,13 @@ class BubbleFrame(QFrame):
         path.lineTo(body_rect.right(), body_rect.bottom() - radius)
         path.arcTo(body_rect.right() - 2*radius, body_rect.bottom() - 2*radius, 2*radius, 2*radius, 0, -90)
         
+        # 하단 중앙 꼬리 부분 그리기
         center_x = body_rect.center().x()
         path.lineTo(center_x + tail_width/2, body_rect.bottom())
         path.lineTo(center_x, body_rect.bottom() + tail_height) 
         path.lineTo(center_x - tail_width/2, body_rect.bottom())
         
+        # 왼쪽 하단 및 측면 마무리
         path.lineTo(body_rect.left() + radius, body_rect.bottom())
         path.arcTo(body_rect.left(), body_rect.bottom() - 2*radius, 2*radius, 2*radius, -90, -90)
         
@@ -115,17 +123,20 @@ class BubbleFrame(QFrame):
         
         path.closeSubpath()
         
+        # 말풍선 내부 채우기 (약간의 투명도 포함)
         painter.fillPath(path, QColor(255, 255, 255, 245))
 
+        # 테두리 그리기
         pen = QPen(QColor("#e0e0e0"))
         pen.setWidth(2)
         painter.setPen(pen)
         painter.drawPath(path)
+        
 
 MAX_IMAGES = 3
 
 # ── 리사이즈 상수 ──────────────────────────────────────────────────
-_RESIZE_MARGIN = 8
+_RESIZE_MARGIN = 20
 _DIR_NONE   = 0
 _DIR_LEFT   = 1
 _DIR_RIGHT  = 2
@@ -655,23 +666,60 @@ class ChatWindow(QWidget):
         super().mouseReleaseEvent(event)
 
     # ── 리사이즈 헬퍼 ────────────────────────────────────────────────
-    def _get_resize_dir(self, cursor_global: QPoint) -> int:
-        """커서가 창 가장자리 어느 방향에 있는지 비트마스크로 반환합니다."""
-        m = _RESIZE_MARGIN
-        x, y = cursor_global.x(), cursor_global.y()
-        wx, wy = self.x(), self.y()
-        ww, wh = self.width(), self.height()
+    def _get_bubble_corners(self):
+        """말풍선의 상하좌우 꼭짓점(코너) 위치를 ChatWindow 로컬 좌표로 반환합니다."""
+        container_pos = self.container.pos()
+        rect = self.container.rect()
+        tail_height = 15
+        radius = 15
+        body_width = rect.width() - 2
+        body_height = rect.height() - tail_height - 2
+        
+        top_left = QPoint(container_pos.x() + 1 + radius, container_pos.y() + 1)
+        top_right = QPoint(container_pos.x() + 1 + body_width - radius, container_pos.y() + 1)
+        bottom_left = QPoint(container_pos.x() + 1 + radius, container_pos.y() + 1 + body_height)
+        bottom_right = QPoint(container_pos.x() + 1 + body_width - radius, container_pos.y() + 1 + body_height)
+        
+        return top_left, top_right, bottom_left, bottom_right
 
-        d = _DIR_NONE
-        if x <= wx + m:
-            d |= _DIR_LEFT
-        elif x >= wx + ww - m:
-            d |= _DIR_RIGHT
-        if y <= wy + m:
-            d |= _DIR_TOP
-        elif y >= wy + wh - m:
-            d |= _DIR_BOTTOM
-        return d
+    def _get_resize_dir(self, cursor_global: QPoint) -> int:
+        """커서 위치가 말풍선의 꼭짓점 근처인지 확인하고 리사이즈 방향을 반환합니다."""
+        cursor_local = self.mapFromGlobal(cursor_global)
+        corners = self._get_bubble_corners()
+        m = _RESIZE_MARGIN
+        
+        # 코너 순서: top_left, top_right, bottom_left, bottom_right
+        corner_dirs = [
+            _DIR_LEFT | _DIR_TOP,
+            _DIR_RIGHT | _DIR_TOP,
+            _DIR_LEFT | _DIR_BOTTOM,
+            _DIR_RIGHT | _DIR_BOTTOM
+        ]
+        
+        for corner, d in zip(corners, corner_dirs):
+            if (corner - cursor_local).manhattanLength() <= m:
+                return d
+        
+        return _DIR_NONE
+
+    def _sync_pet_with_bubble(self):
+        """말풍선 하단 중앙(꼬리 부분)에 펫이 오도록 위치를 조정합니다."""
+        if not self.pet_window:
+            return
+
+        # 채팅창의 현재 전체 영역
+        geom = self.geometry()
+        
+        # 말풍선 꼬리가 위치한 하단 중앙 X 좌표 계산
+        center_x = geom.x() + (geom.width() // 2)
+        
+        # 펫의 새로운 위치 계산
+        # X: 꼬리 중앙에서 펫 너비의 절반만큼 왼쪽으로 (중앙 정렬)
+        # Y: 채팅창 최하단에서 펫의 머리 부분이 살짝 겹치도록 (수치는 펫 크기에 맞게 조정)
+        pet_new_x = center_x - (self.pet_window.width() // 2)
+        pet_new_y = geom.y() + geom.height() - 35  # 35px 정도 겹치게 설정
+        
+        self.pet_window.move(pet_new_x, pet_new_y)    
 
     def _update_resize_cursor(self, d: int):
         self.setCursor(QCursor(_RESIZE_CURSOR_MAP.get(d, Qt.CursorShape.ArrowCursor)))
@@ -683,11 +731,14 @@ class ChatWindow(QWidget):
         self._resize_start_geom = self.geometry()
 
     def _do_resize(self, cursor_global: QPoint):
+        """실제로 창의 크기를 조정하고 펫의 위치를 동기화합니다."""
         if self._resize_start_global is None:
             return
+        
         delta = cursor_global - self._resize_start_global
         g = QRect(self._resize_start_geom)
 
+        # 비트 연산 결과에 따라 좌표 계산
         if self._resize_dir & _DIR_RIGHT:
             g.setRight(g.right() + delta.x())
         if self._resize_dir & _DIR_BOTTOM:
@@ -697,24 +748,23 @@ class ChatWindow(QWidget):
         if self._resize_dir & _DIR_TOP:
             g.setTop(g.top() + delta.y())
 
-        # 최소 크기 강제
+        # 최소 크기 강제 (UI 붕괴 방지)
         min_w, min_h = self.minimumWidth(), self.minimumHeight()
         if g.width() < min_w:
-            if self._resize_dir & _DIR_LEFT:
-                g.setLeft(g.right() - min_w)
-            else:
-                g.setRight(g.left() + min_w)
+            if self._resize_dir & _DIR_LEFT: g.setLeft(g.right() - min_w)
+            else: g.setRight(g.left() + min_w)
         if g.height() < min_h:
-            if self._resize_dir & _DIR_TOP:
-                g.setTop(g.bottom() - min_h)
-            else:
-                g.setBottom(g.top() + min_h)
+            if self._resize_dir & _DIR_TOP: g.setTop(g.bottom() - min_h)
+            else: g.setBottom(g.top() + min_h)
 
         self.setGeometry(g)
-
+    
+        # 펫 위치를 말풍선 꼬리에 실시간으로 맞춤
+        self._sync_pet_with_bubble()
+    
     def _end_resize(self):
         self._resize_active = False
         self._resize_dir = _DIR_NONE
         self._resize_start_global = None
         self._resize_start_geom = None
-        self.unsetCursor()
+        self.unsetCursor()
