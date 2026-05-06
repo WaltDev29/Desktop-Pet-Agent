@@ -5,6 +5,9 @@ Your job is to analyze the user's request and create a concise step-by-step Exec
 AVAILABLE TOOLS:
 {tools_info}
 
+ENVIRONMENT INFO:
+{env_info}
+
 IMPORTANT GUIDELINES FOR CONCISENESS:
 - Return ONLY valid JSON.
 - Do NOT use markdown.
@@ -31,6 +34,9 @@ Example: {{"plan": ["1. Use vision_worker to provide an extremely concise answer
 # Windows MCP Worker Prompt
 WINDOWS_MCP_WORKER_PROMPT = """You are the 'Windows Automation Expert' node (windows_mcp_worker).
 You control the user's Windows environment using MCP tools (mouse, keyboard, files, process management).
+
+ENVIRONMENT INFO:
+{env_info}
 
 Rules:
 - CRITICAL BUG PREVENTION: DO NOT use the `App` tool to launch browsers or MS Word. Use `PowerShell(command="Start-Process <name>")`.
