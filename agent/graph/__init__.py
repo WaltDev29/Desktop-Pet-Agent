@@ -81,14 +81,14 @@ async def create_agent():
     # ==========================================
     # 노드 초기화
     # ==========================================
-    planner_node    = make_planner_node(llm)
+    planner_node    = make_planner_node(llm, all_tools)
     router_node     = make_master_router_node(llm)
     windows_mcp_node = make_windows_mcp_worker(windows_mcp_llm)
     external_mcp_node = make_external_mcp_worker(external_mcp_llm)
     vision_worker_node = make_vision_worker(llm)
     aggregator_node = make_aggregator_node(llm)
 
-    tool_node       = ToolNode(all_tools)
+    tool_node       = ToolNode(all_tools, handle_tool_errors=True)
 
     # ==========================================
     # 그래프 조립
