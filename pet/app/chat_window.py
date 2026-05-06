@@ -27,7 +27,8 @@ from app.chat_style import (
     PET_MSG_FORMAT,
     ERROR_MSG_FORMAT,
     OPACITY_SLIDER_STYLE,
-    OPACITY_LABEL_STYLE
+    OPACITY_LABEL_STYLE,
+    convert_markdown_to_html
 )
 
 class ChatSignaler(QObject):
@@ -84,17 +85,23 @@ class BubbleFrame(QFrame):
         super().mouseReleaseEvent(event)
 
     def paintEvent(self, event):
+        """말풍선 배경을 그리고 마우스 이벤트를 받기 위한 투명 레이어를 생성합니다."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
+
+        # 투명 영역 클릭을 감지하기 위해 아주 미세한 알파값(1)을 가진 배경을 채움
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 1))
         
         rect = self.rect()
         tail_height = 15
         tail_width = 20
         radius = 15
         
+        # 실제 말풍선 본체 영역 (상하좌우 1px씩 여백)
         body_rect = QRectF(1, 1, rect.width() - 2, rect.height() - tail_height - 2)
         
         path = QPainterPath()
+        # 말풍선 상단 및 측면 그리기
         path.moveTo(body_rect.left() + radius, body_rect.top())
         path.lineTo(body_rect.right() - radius, body_rect.top())
         path.arcTo(body_rect.right() - 2*radius, body_rect.top(), 2*radius, 2*radius, 90, -90)
@@ -102,11 +109,13 @@ class BubbleFrame(QFrame):
         path.lineTo(body_rect.right(), body_rect.bottom() - radius)
         path.arcTo(body_rect.right() - 2*radius, body_rect.bottom() - 2*radius, 2*radius, 2*radius, 0, -90)
         
+        # 하단 중앙 꼬리 부분 그리기
         center_x = body_rect.center().x()
         path.lineTo(center_x + tail_width/2, body_rect.bottom())
         path.lineTo(center_x, body_rect.bottom() + tail_height) 
         path.lineTo(center_x - tail_width/2, body_rect.bottom())
         
+        # 왼쪽 하단 및 측면 마무리
         path.lineTo(body_rect.left() + radius, body_rect.bottom())
         path.arcTo(body_rect.left(), body_rect.bottom() - 2*radius, 2*radius, 2*radius, -90, -90)
         
@@ -115,17 +124,20 @@ class BubbleFrame(QFrame):
         
         path.closeSubpath()
         
+        # 말풍선 내부 채우기 (약간의 투명도 포함)
         painter.fillPath(path, QColor(255, 255, 255, 245))
 
+        # 테두리 그리기
         pen = QPen(QColor("#e0e0e0"))
         pen.setWidth(2)
         painter.setPen(pen)
         painter.drawPath(path)
+        
 
 MAX_IMAGES = 3
 
 # ── 리사이즈 상수 ──────────────────────────────────────────────────
-_RESIZE_MARGIN = 8
+_RESIZE_MARGIN = 20
 _DIR_NONE   = 0
 _DIR_LEFT   = 1
 _DIR_RIGHT  = 2
@@ -219,6 +231,9 @@ class ChatWindow(QWidget):
         self.chat_history = QTextEdit()
         self.chat_history.setReadOnly(True)
         self.chat_history.setStyleSheet(CHAT_HISTORY_STYLE)
+        self.chat_history.setMaximumHeight(250)
+        self.chat_history.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.chat_history.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         
         self.btn_area = QWidget()
         self.btn_layout = QHBoxLayout(self.btn_area)
@@ -319,6 +334,12 @@ class ChatWindow(QWidget):
         self.ws_conn = None
         self._ws_lock = threading.Lock()
 
+        # 스트림 관련 변수
+        self._streaming = False
+        self._current_stream_text = ""
+        self._current_node_name = None
+        self._current_response_index: int | None = None
+
         self.pet_window = pet_window
         self._start_websocket_thread()
 
@@ -409,17 +430,24 @@ class ChatWindow(QWidget):
 
         # 채팅 히스토리에 사용자 메시지 표시
         display_text = text if text else "(이미지 전송)"
-        formatted_text = display_text.replace('\n', '<br>')
+        formatted_text = display_text
         if images:
-            img_count = len(images)
-            formatted_text += f"<br><span style='color:#888888; font-size:11px;'>📎 이미지 {img_count}장 첨부</span>"
+            for image_uri in images:
+                formatted_text += f"\n\n![이미지]({image_uri})"
 
-        user_html = USER_MSG_FORMAT.format(text=formatted_text)
-        self.message_history.append(user_html)
+        # 마크다운을 HTML로 변환
+        html_content = convert_markdown_to_html(formatted_text)
+        user_md = USER_MSG_FORMAT.format(text=html_content)
+        self.message_history.append(user_md)
 
-        thinking_html = PET_MSG_FORMAT.format(text="생각 중...")
-        full_html = "".join(self.message_history) + thinking_html
-        self.chat_history.setHtml(full_html)
+        thinking_md = PET_MSG_FORMAT.format(text="생각 중...")
+        self._current_response_index = len(self.message_history)
+        self.message_history.append(thinking_md)
+        self._current_node_name = None
+        self._streaming = False
+        self._current_stream_text = ""
+
+        self.chat_history.setHtml("".join(self.message_history))
         self.scrollToBottom()
 
         self.input_field.clear()
@@ -482,28 +510,112 @@ class ChatWindow(QWidget):
             QApplication.instance().quit()
             return
 
-        # 에이전트가 오류 응답을 반환한 경우 에러로 처리
-        if data.get("status") == "error":
+        status = data.get("status")
+
+        if status == "error":
             self.on_error_occurred(data.get("message", "알 수 없는 오류가 발생했습니다."))
             return
 
-        reply = data.get("response") or data.get("message") or str(data)
-        formatted_reply = reply.replace('\n', '<br>')
-        
-        pet_html = PET_MSG_FORMAT.format(text=formatted_reply)
-        self.message_history.append(pet_html)
-        
-        self.chat_history.setHtml("".join(self.message_history))
-        self.scrollToBottom()
-        
-        if data.get("session_id"): self.session_id = data["session_id"]
+        elif status == "approval_required":
+            self._streaming = False
+            self._current_stream_text = ""
+            self._current_node_name = None
+            if data.get("session_id"):
+                self.session_id = data["session_id"]
+            self.pending_tool_call_id = data.get("tool_call_id")
+            self.btn_area.setVisible(True)
+            self.input_field.setEnabled(False)
+            self.attach_btn.setEnabled(False)
+            return
+
+        elif status == "node_start":
+            node_name = data.get("node", "")
+            self._current_node_name = node_name
+            if self._current_response_index is not None and 0 <= self._current_response_index < len(self.message_history):
+                if node_name == "aggregator":
+                    self.message_history[self._current_response_index] = PET_MSG_FORMAT.format(text="답변 생성 중...")
+                else:
+                    self.message_history[self._current_response_index] = PET_MSG_FORMAT.format(text="생각 중...")
+                self.chat_history.setHtml("".join(self.message_history))
+                self.scrollToBottom()
+            return
+
+        elif status == "tool_start":
+            if self._current_response_index is not None and 0 <= self._current_response_index < len(self.message_history):
+                self.message_history[self._current_response_index] = PET_MSG_FORMAT.format(text="도구 실행 중...")
+                self.chat_history.setHtml("".join(self.message_history))
+                self.scrollToBottom()
+            return
+
+        elif status == "stream_chunk":
+            chunk = data.get("chunk", "")
+            if self._current_node_name == "aggregator":
+                if not self._streaming:
+                    self._streaming = True
+                    self._current_stream_text = ""
+                self._current_stream_text += chunk
+                if self._current_response_index is not None and 0 <= self._current_response_index < len(self.message_history):
+                    # 마크다운을 HTML로 변환
+                    html_reply = convert_markdown_to_html(self._current_stream_text)
+                    self.message_history[self._current_response_index] = PET_MSG_FORMAT.format(text=html_reply)
+                    self.chat_history.setHtml("".join(self.message_history))
+                    self.scrollToBottom()
+            else:
+                # Aggregator 이전 노드의 스트림은 화면에 그대로 노출하지 않음
+                if self._current_response_index is not None and 0 <= self._current_response_index < len(self.message_history):
+                    self.message_history[self._current_response_index] = PET_MSG_FORMAT.format(text="생각 중...")
+                    self.chat_history.setHtml("".join(self.message_history))
+                    self.scrollToBottom()
+            return
+
+        elif status == "stream_end" or status == "success":
+            if self._current_node_name == "aggregator":
+                if self._streaming:
+                    self._streaming = False
+                    formatted_reply = self._current_stream_text
+                else:
+                    reply = data.get("response") or data.get("message") or ""
+                    formatted_reply = reply if reply else "생각 중..."
+                if self._current_response_index is not None and 0 <= self._current_response_index < len(self.message_history):
+                    # 마크다운을 HTML로 변환
+                    html_reply = convert_markdown_to_html(formatted_reply)
+                    self.message_history[self._current_response_index] = PET_MSG_FORMAT.format(text=html_reply)
+                else:
+                    self.message_history.append(PET_MSG_FORMAT.format(text=formatted_reply))
+                self.chat_history.setHtml("".join(self.message_history))
+                self.scrollToBottom()
+                self._current_stream_text = ""
+            else:
+                # Aggregator 외 내부 노드가 끝난 경우, 기존 thinking placeholder 유지
+                self._streaming = False
+                self._current_stream_text = ""
+            if data.get("session_id"):
+                self.session_id = data["session_id"]
+            self._current_node_name = None
+            # stream_end 처리 후 input 필드 활성화
+            self.input_field.setEnabled(True)
+            self.attach_btn.setEnabled(True)
+            self.input_field.setFocus()
+
+        else:
+            reply = data.get("response") or data.get("message") or str(data)
+            # 마크다운을 HTML로 변환
+            html_reply = convert_markdown_to_html(reply)
+            pet_html = PET_MSG_FORMAT.format(text=html_reply)
+            self.message_history.append(pet_html)
+            self.chat_history.setHtml("".join(self.message_history))
+            self.scrollToBottom()
+
+        if data.get("session_id"): 
+            self.session_id = data["session_id"]
         self.pending_tool_call_id = data.get("tool_call_id")
         
-        is_waiting = (data.get("status") == "approval_required")
+        is_waiting = (status == "approval_required")
         self.btn_area.setVisible(is_waiting)
         self.input_field.setEnabled(not is_waiting)
         self.attach_btn.setEnabled(not is_waiting)
-        if not is_waiting: self.input_field.setFocus()
+        if not is_waiting: 
+            self.input_field.setFocus()
 
 
     def process_btn(self, choice: str):
@@ -511,12 +623,20 @@ class ChatWindow(QWidget):
         is_approved = (choice == "approved")
         choice_text = "승인" if is_approved else "거절"
         
-        user_msg = USER_MSG_FORMAT.format(text=f"[{choice_text}] 하겠어.")
+        # 마크다운을 HTML로 변환
+        user_text = f"[{choice_text}] 하겠어."
+        html_user_text = convert_markdown_to_html(user_text)
+        user_msg = USER_MSG_FORMAT.format(text=html_user_text)
         self.message_history.append(user_msg)
-        
-        thinking_html = PET_MSG_FORMAT.format(text="결과를 서버에 전달하는 중...")
-        full_html = "".join(self.message_history) + thinking_html
-        self.chat_history.setHtml(full_html)
+
+        thinking_md = PET_MSG_FORMAT.format(text="결과를 서버에 전달하는 중...")
+        self._current_response_index = len(self.message_history)
+        self.message_history.append(thinking_md)
+        self._current_node_name = None
+        self._streaming = False
+        self._current_stream_text = ""
+
+        self.chat_history.setHtml("".join(self.message_history))
         self.scrollToBottom()
 
         payload = {
@@ -529,7 +649,9 @@ class ChatWindow(QWidget):
     def on_error_occurred(self, error: str):
         safe_error = html.escape(error)
         
-        error_msg = ERROR_MSG_FORMAT.format(text=safe_error)
+        # 마크다운 변환 (일관성 유지)
+        html_error = convert_markdown_to_html(safe_error)
+        error_msg = ERROR_MSG_FORMAT.format(text=html_error)
         self.message_history.append(error_msg)
         self.chat_history.setHtml("".join(self.message_history))
         self.scrollToBottom()
@@ -655,23 +777,60 @@ class ChatWindow(QWidget):
         super().mouseReleaseEvent(event)
 
     # ── 리사이즈 헬퍼 ────────────────────────────────────────────────
-    def _get_resize_dir(self, cursor_global: QPoint) -> int:
-        """커서가 창 가장자리 어느 방향에 있는지 비트마스크로 반환합니다."""
-        m = _RESIZE_MARGIN
-        x, y = cursor_global.x(), cursor_global.y()
-        wx, wy = self.x(), self.y()
-        ww, wh = self.width(), self.height()
+    def _get_bubble_corners(self):
+        """말풍선의 상하좌우 꼭짓점(코너) 위치를 ChatWindow 로컬 좌표로 반환합니다."""
+        container_pos = self.container.pos()
+        rect = self.container.rect()
+        tail_height = 15
+        radius = 15
+        body_width = rect.width() - 2
+        body_height = rect.height() - tail_height - 2
+        
+        top_left = QPoint(container_pos.x() + 1 + radius, container_pos.y() + 1)
+        top_right = QPoint(container_pos.x() + 1 + body_width - radius, container_pos.y() + 1)
+        bottom_left = QPoint(container_pos.x() + 1 + radius, container_pos.y() + 1 + body_height)
+        bottom_right = QPoint(container_pos.x() + 1 + body_width - radius, container_pos.y() + 1 + body_height)
+        
+        return top_left, top_right, bottom_left, bottom_right
 
-        d = _DIR_NONE
-        if x <= wx + m:
-            d |= _DIR_LEFT
-        elif x >= wx + ww - m:
-            d |= _DIR_RIGHT
-        if y <= wy + m:
-            d |= _DIR_TOP
-        elif y >= wy + wh - m:
-            d |= _DIR_BOTTOM
-        return d
+    def _get_resize_dir(self, cursor_global: QPoint) -> int:
+        """커서 위치가 말풍선의 꼭짓점 근처인지 확인하고 리사이즈 방향을 반환합니다."""
+        cursor_local = self.mapFromGlobal(cursor_global)
+        corners = self._get_bubble_corners()
+        m = _RESIZE_MARGIN
+        
+        # 코너 순서: top_left, top_right, bottom_left, bottom_right
+        corner_dirs = [
+            _DIR_LEFT | _DIR_TOP,
+            _DIR_RIGHT | _DIR_TOP,
+            _DIR_LEFT | _DIR_BOTTOM,
+            _DIR_RIGHT | _DIR_BOTTOM
+        ]
+        
+        for corner, d in zip(corners, corner_dirs):
+            if (corner - cursor_local).manhattanLength() <= m:
+                return d
+        
+        return _DIR_NONE
+
+    def _sync_pet_with_bubble(self):
+        """말풍선 하단 중앙(꼬리 부분)에 펫이 오도록 위치를 조정합니다."""
+        if not self.pet_window:
+            return
+
+        # 채팅창의 현재 전체 영역
+        geom = self.geometry()
+        
+        # 말풍선 꼬리가 위치한 하단 중앙 X 좌표 계산
+        center_x = geom.x() + (geom.width() // 2)
+        
+        # 펫의 새로운 위치 계산
+        # X: 꼬리 중앙에서 펫 너비의 절반만큼 왼쪽으로 (중앙 정렬)
+        # Y: 채팅창 최하단에서 펫의 머리 부분이 살짝 겹치도록 (수치는 펫 크기에 맞게 조정)
+        pet_new_x = center_x - (self.pet_window.width() // 2)
+        pet_new_y = geom.y() + geom.height() - 35  # 35px 정도 겹치게 설정
+        
+        self.pet_window.move(pet_new_x, pet_new_y)    
 
     def _update_resize_cursor(self, d: int):
         self.setCursor(QCursor(_RESIZE_CURSOR_MAP.get(d, Qt.CursorShape.ArrowCursor)))
@@ -683,11 +842,14 @@ class ChatWindow(QWidget):
         self._resize_start_geom = self.geometry()
 
     def _do_resize(self, cursor_global: QPoint):
+        """실제로 창의 크기를 조정하고 펫의 위치를 동기화합니다."""
         if self._resize_start_global is None:
             return
+        
         delta = cursor_global - self._resize_start_global
         g = QRect(self._resize_start_geom)
 
+        # 비트 연산 결과에 따라 좌표 계산
         if self._resize_dir & _DIR_RIGHT:
             g.setRight(g.right() + delta.x())
         if self._resize_dir & _DIR_BOTTOM:
@@ -697,24 +859,23 @@ class ChatWindow(QWidget):
         if self._resize_dir & _DIR_TOP:
             g.setTop(g.top() + delta.y())
 
-        # 최소 크기 강제
+        # 최소 크기 강제 (UI 붕괴 방지)
         min_w, min_h = self.minimumWidth(), self.minimumHeight()
         if g.width() < min_w:
-            if self._resize_dir & _DIR_LEFT:
-                g.setLeft(g.right() - min_w)
-            else:
-                g.setRight(g.left() + min_w)
+            if self._resize_dir & _DIR_LEFT: g.setLeft(g.right() - min_w)
+            else: g.setRight(g.left() + min_w)
         if g.height() < min_h:
-            if self._resize_dir & _DIR_TOP:
-                g.setTop(g.bottom() - min_h)
-            else:
-                g.setBottom(g.top() + min_h)
+            if self._resize_dir & _DIR_TOP: g.setTop(g.bottom() - min_h)
+            else: g.setBottom(g.top() + min_h)
 
         self.setGeometry(g)
-
+    
+        # 펫 위치를 말풍선 꼬리에 실시간으로 맞춤
+        self._sync_pet_with_bubble()
+    
     def _end_resize(self):
         self._resize_active = False
         self._resize_dir = _DIR_NONE
         self._resize_start_global = None
         self._resize_start_geom = None
-        self.unsetCursor()
+        self.unsetCursor()
