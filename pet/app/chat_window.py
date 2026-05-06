@@ -27,7 +27,8 @@ from app.chat_style import (
     PET_MSG_FORMAT,
     ERROR_MSG_FORMAT,
     OPACITY_SLIDER_STYLE,
-    OPACITY_LABEL_STYLE
+    OPACITY_LABEL_STYLE,
+    convert_markdown_to_html
 )
 
 class ChatSignaler(QObject):
@@ -230,6 +231,9 @@ class ChatWindow(QWidget):
         self.chat_history = QTextEdit()
         self.chat_history.setReadOnly(True)
         self.chat_history.setStyleSheet(CHAT_HISTORY_STYLE)
+        self.chat_history.setMaximumHeight(250)
+        self.chat_history.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.chat_history.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         
         self.btn_area = QWidget()
         self.btn_layout = QHBoxLayout(self.btn_area)
@@ -330,6 +334,12 @@ class ChatWindow(QWidget):
         self.ws_conn = None
         self._ws_lock = threading.Lock()
 
+        # 스트림 관련 변수
+        self._streaming = False
+        self._current_stream_text = ""
+        self._current_node_name = None
+        self._current_response_index: int | None = None
+
         self.pet_window = pet_window
         self._start_websocket_thread()
 
@@ -420,17 +430,24 @@ class ChatWindow(QWidget):
 
         # 채팅 히스토리에 사용자 메시지 표시
         display_text = text if text else "(이미지 전송)"
-        formatted_text = display_text.replace('\n', '<br>')
+        formatted_text = display_text
         if images:
-            img_count = len(images)
-            formatted_text += f"<br><span style='color:#888888; font-size:11px;'>📎 이미지 {img_count}장 첨부</span>"
+            for image_uri in images:
+                formatted_text += f"\n\n![이미지]({image_uri})"
 
-        user_html = USER_MSG_FORMAT.format(text=formatted_text)
-        self.message_history.append(user_html)
+        # 마크다운을 HTML로 변환
+        html_content = convert_markdown_to_html(formatted_text)
+        user_md = USER_MSG_FORMAT.format(text=html_content)
+        self.message_history.append(user_md)
 
-        thinking_html = PET_MSG_FORMAT.format(text="생각 중...")
-        full_html = "".join(self.message_history) + thinking_html
-        self.chat_history.setHtml(full_html)
+        thinking_md = PET_MSG_FORMAT.format(text="생각 중...")
+        self._current_response_index = len(self.message_history)
+        self.message_history.append(thinking_md)
+        self._current_node_name = None
+        self._streaming = False
+        self._current_stream_text = ""
+
+        self.chat_history.setHtml("".join(self.message_history))
         self.scrollToBottom()
 
         self.input_field.clear()
@@ -493,28 +510,112 @@ class ChatWindow(QWidget):
             QApplication.instance().quit()
             return
 
-        # 에이전트가 오류 응답을 반환한 경우 에러로 처리
-        if data.get("status") == "error":
+        status = data.get("status")
+
+        if status == "error":
             self.on_error_occurred(data.get("message", "알 수 없는 오류가 발생했습니다."))
             return
 
-        reply = data.get("response") or data.get("message") or str(data)
-        formatted_reply = reply.replace('\n', '<br>')
-        
-        pet_html = PET_MSG_FORMAT.format(text=formatted_reply)
-        self.message_history.append(pet_html)
-        
-        self.chat_history.setHtml("".join(self.message_history))
-        self.scrollToBottom()
-        
-        if data.get("session_id"): self.session_id = data["session_id"]
+        elif status == "approval_required":
+            self._streaming = False
+            self._current_stream_text = ""
+            self._current_node_name = None
+            if data.get("session_id"):
+                self.session_id = data["session_id"]
+            self.pending_tool_call_id = data.get("tool_call_id")
+            self.btn_area.setVisible(True)
+            self.input_field.setEnabled(False)
+            self.attach_btn.setEnabled(False)
+            return
+
+        elif status == "node_start":
+            node_name = data.get("node", "")
+            self._current_node_name = node_name
+            if self._current_response_index is not None and 0 <= self._current_response_index < len(self.message_history):
+                if node_name == "aggregator":
+                    self.message_history[self._current_response_index] = PET_MSG_FORMAT.format(text="답변 생성 중...")
+                else:
+                    self.message_history[self._current_response_index] = PET_MSG_FORMAT.format(text="생각 중...")
+                self.chat_history.setHtml("".join(self.message_history))
+                self.scrollToBottom()
+            return
+
+        elif status == "tool_start":
+            if self._current_response_index is not None and 0 <= self._current_response_index < len(self.message_history):
+                self.message_history[self._current_response_index] = PET_MSG_FORMAT.format(text="도구 실행 중...")
+                self.chat_history.setHtml("".join(self.message_history))
+                self.scrollToBottom()
+            return
+
+        elif status == "stream_chunk":
+            chunk = data.get("chunk", "")
+            if self._current_node_name == "aggregator":
+                if not self._streaming:
+                    self._streaming = True
+                    self._current_stream_text = ""
+                self._current_stream_text += chunk
+                if self._current_response_index is not None and 0 <= self._current_response_index < len(self.message_history):
+                    # 마크다운을 HTML로 변환
+                    html_reply = convert_markdown_to_html(self._current_stream_text)
+                    self.message_history[self._current_response_index] = PET_MSG_FORMAT.format(text=html_reply)
+                    self.chat_history.setHtml("".join(self.message_history))
+                    self.scrollToBottom()
+            else:
+                # Aggregator 이전 노드의 스트림은 화면에 그대로 노출하지 않음
+                if self._current_response_index is not None and 0 <= self._current_response_index < len(self.message_history):
+                    self.message_history[self._current_response_index] = PET_MSG_FORMAT.format(text="생각 중...")
+                    self.chat_history.setHtml("".join(self.message_history))
+                    self.scrollToBottom()
+            return
+
+        elif status == "stream_end" or status == "success":
+            if self._current_node_name == "aggregator":
+                if self._streaming:
+                    self._streaming = False
+                    formatted_reply = self._current_stream_text
+                else:
+                    reply = data.get("response") or data.get("message") or ""
+                    formatted_reply = reply if reply else "생각 중..."
+                if self._current_response_index is not None and 0 <= self._current_response_index < len(self.message_history):
+                    # 마크다운을 HTML로 변환
+                    html_reply = convert_markdown_to_html(formatted_reply)
+                    self.message_history[self._current_response_index] = PET_MSG_FORMAT.format(text=html_reply)
+                else:
+                    self.message_history.append(PET_MSG_FORMAT.format(text=formatted_reply))
+                self.chat_history.setHtml("".join(self.message_history))
+                self.scrollToBottom()
+                self._current_stream_text = ""
+            else:
+                # Aggregator 외 내부 노드가 끝난 경우, 기존 thinking placeholder 유지
+                self._streaming = False
+                self._current_stream_text = ""
+            if data.get("session_id"):
+                self.session_id = data["session_id"]
+            self._current_node_name = None
+            # stream_end 처리 후 input 필드 활성화
+            self.input_field.setEnabled(True)
+            self.attach_btn.setEnabled(True)
+            self.input_field.setFocus()
+
+        else:
+            reply = data.get("response") or data.get("message") or str(data)
+            # 마크다운을 HTML로 변환
+            html_reply = convert_markdown_to_html(reply)
+            pet_html = PET_MSG_FORMAT.format(text=html_reply)
+            self.message_history.append(pet_html)
+            self.chat_history.setHtml("".join(self.message_history))
+            self.scrollToBottom()
+
+        if data.get("session_id"): 
+            self.session_id = data["session_id"]
         self.pending_tool_call_id = data.get("tool_call_id")
         
-        is_waiting = (data.get("status") == "approval_required")
+        is_waiting = (status == "approval_required")
         self.btn_area.setVisible(is_waiting)
         self.input_field.setEnabled(not is_waiting)
         self.attach_btn.setEnabled(not is_waiting)
-        if not is_waiting: self.input_field.setFocus()
+        if not is_waiting: 
+            self.input_field.setFocus()
 
 
     def process_btn(self, choice: str):
@@ -522,12 +623,20 @@ class ChatWindow(QWidget):
         is_approved = (choice == "approved")
         choice_text = "승인" if is_approved else "거절"
         
-        user_msg = USER_MSG_FORMAT.format(text=f"[{choice_text}] 하겠어.")
+        # 마크다운을 HTML로 변환
+        user_text = f"[{choice_text}] 하겠어."
+        html_user_text = convert_markdown_to_html(user_text)
+        user_msg = USER_MSG_FORMAT.format(text=html_user_text)
         self.message_history.append(user_msg)
-        
-        thinking_html = PET_MSG_FORMAT.format(text="결과를 서버에 전달하는 중...")
-        full_html = "".join(self.message_history) + thinking_html
-        self.chat_history.setHtml(full_html)
+
+        thinking_md = PET_MSG_FORMAT.format(text="결과를 서버에 전달하는 중...")
+        self._current_response_index = len(self.message_history)
+        self.message_history.append(thinking_md)
+        self._current_node_name = None
+        self._streaming = False
+        self._current_stream_text = ""
+
+        self.chat_history.setHtml("".join(self.message_history))
         self.scrollToBottom()
 
         payload = {
@@ -540,7 +649,9 @@ class ChatWindow(QWidget):
     def on_error_occurred(self, error: str):
         safe_error = html.escape(error)
         
-        error_msg = ERROR_MSG_FORMAT.format(text=safe_error)
+        # 마크다운 변환 (일관성 유지)
+        html_error = convert_markdown_to_html(safe_error)
+        error_msg = ERROR_MSG_FORMAT.format(text=html_error)
         self.message_history.append(error_msg)
         self.chat_history.setHtml("".join(self.message_history))
         self.scrollToBottom()
