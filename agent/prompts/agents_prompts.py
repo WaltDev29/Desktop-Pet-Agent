@@ -5,6 +5,9 @@ Your job is to analyze the user's request and create a concise step-by-step Exec
 AVAILABLE TOOLS:
 {tools_info}
 
+ENVIRONMENT INFO:
+{env_info}
+
 IMPORTANT GUIDELINES FOR CONCISENESS:
 - Return ONLY valid JSON.
 - Do NOT use markdown.
@@ -31,6 +34,9 @@ Example: {{"plan": ["1. Use vision_worker to provide an extremely concise answer
 # General MCP Worker Prompt
 GENERAL_MCP_WORKER_PROMPT = """You are the 'General Tools Expert' node (general_mcp_worker).
 You handle all tasks EXCEPT image analysis using a variety of MCP tools (Windows automation, Email, Cloud services, etc.).
+
+ENVIRONMENT INFO:
+{env_info}
 
 Rules:
 - Analyze the available tools and choose the most appropriate one for the assigned sub-task.

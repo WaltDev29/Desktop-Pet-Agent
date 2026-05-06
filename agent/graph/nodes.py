@@ -13,6 +13,7 @@ LangGraph 그래프를 구성하는 모든 노드 및 조건부 엣지 함수를
   /approve API에서 Command(resume=True/False)로 재개하면 Worker가 이어서 실행됩니다.
 """
 
+import os
 import json
 import logging
 from typing import Literal
@@ -71,8 +72,13 @@ def make_planner_node(llm: Runnable, tools: list = None):
     else:
         tools_info = "No specific tools provided."
 
-    # 프롬프트에 도구 정보 주입
-    system_prompt = PLANNER_PROMPT.format(tools_info=tools_info)
+    # 환경 정보 추출
+    user_profile = os.environ.get("USERPROFILE", "Unknown")
+    user_name = os.environ.get("USERNAME", "Unknown")
+    env_info = f"- Current User: {user_name}\n- User Profile Path: {user_profile}"
+
+    # 프롬프트에 도구 정보 및 환경 정보 주입
+    system_prompt = PLANNER_PROMPT.format(tools_info=tools_info, env_info=env_info)
 
     async def planner_node(state: AgentState):
         # 가장 마지막 HumanMessage를 원본 요청으로 저장 (Aggregator에서 정확하게 참조)
@@ -390,9 +396,16 @@ def _make_base_worker(llm_with_tools: Runnable, system_prompt: str, worker_label
 
 def make_general_mcp_worker(llm_with_tools: Runnable):
     """모든 MCP 도구를 담당하는 범용 Worker."""
+    # 환경 정보 추출
+    user_profile = os.environ.get("USERPROFILE", "Unknown")
+    user_name = os.environ.get("USERNAME", "Unknown")
+    env_info = f"- Current User: {user_name}\n- User Profile Path: {user_profile}"
+
+    system_prompt = GENERAL_MCP_WORKER_PROMPT.format(env_info=env_info)
+
     return _make_base_worker(
         llm_with_tools,
-        system_prompt=GENERAL_MCP_WORKER_PROMPT,
+        system_prompt=system_prompt,
         worker_label="general_mcp_worker",
     )
 
