@@ -55,11 +55,24 @@ MAX_TOOL_CALLS = 15
 # 1. Planner Node
 # ==========================================
 
-def make_planner_node(llm: Runnable):
+def make_planner_node(llm: Runnable, tools: list = None):
     """
     사용자의 요청을 분석해 단계별 실행 계획(Plan)을 수립합니다.
     """
     planner_llm = llm.with_structured_output(ExecutionPlan)
+    
+    # 도구 정보 요약 생성
+    if tools:
+        tools_list = []
+        for t in tools:
+            desc = t.description.split("\n")[0] # 첫 줄만 사용해 간결하게 유지
+            tools_list.append(f"- {t.name}: {desc}")
+        tools_info = "\n".join(tools_list)
+    else:
+        tools_info = "No specific tools provided."
+
+    # 프롬프트에 도구 정보 주입
+    system_prompt = PLANNER_PROMPT.format(tools_info=tools_info)
 
     async def planner_node(state: AgentState):
         # 가장 마지막 HumanMessage를 원본 요청으로 저장 (Aggregator에서 정확하게 참조)
@@ -91,7 +104,7 @@ def make_planner_node(llm: Runnable):
         hint = f"\n\n[System Hint: User has uploaded {image_count} image(s).]" if image_count > 0 else ""
         
         # 메시지 조합 (SystemMessage + History + optional Hint)
-        input_msgs = [SystemMessage(content=PLANNER_PROMPT)] + chat_history
+        input_msgs = [SystemMessage(content=system_prompt)] + chat_history
         if hint:
             input_msgs.append(HumanMessage(content=hint))
 
