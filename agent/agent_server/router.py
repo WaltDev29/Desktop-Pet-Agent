@@ -73,9 +73,20 @@ async def _initial_state(payload: ChatPayload, session_id: str, existing_images:
     new_uploaded_urls = []
     if payload.images:
         for img in payload.images[:3]:
-            # upload_image 함수가 있다는 전제 (기존 로직)
-            url_data = await upload_image(img, "default", session_id)
-            new_uploaded_urls.append(url_data)
+            # 이미지 데이터가 이미 URL(http/https) 형식이면 업로드 생략
+            if img.startswith("http"):
+                # 게이트웨이가 생성한 URL (사용자ID/세션ID/UUID.png 조합)
+                # 파일명 부분에서 UUID 추출 시도 (실패 시 랜덤 생성)
+                image_uuid = img.split("/")[-1].split(".")[0] if "/" in img else str(uuid.uuid4())
+                new_uploaded_urls.append({
+                    "url": img,
+                    "uuid": image_uuid,
+                    "session_id": session_id
+                })
+            else:
+                # Base64 데이터면 기존처럼 업로드 (로컬 모드 대응용)
+                url_data = await upload_image(img, "default", session_id)
+                new_uploaded_urls.append(url_data)
             
     content = payload.message
     total_image_count = len(existing_images) + len(new_uploaded_urls)
@@ -99,7 +110,7 @@ async def _initial_state(payload: ChatPayload, session_id: str, existing_images:
 # ==========================================
 class LocalConnectionManager:
     def __init__(self):
-        self.active_connections = []
+        self.active_connections: list[WebSocket] = []
 
     async def connect(self, websocket: WebSocket):
         self.active_connections.append(websocket)
@@ -108,23 +119,23 @@ class LocalConnectionManager:
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
 
-    async def broadcast(self, msg: WsMessage):
-        """Send message to all local connected UI"""
-        msg_json = msg.model_dump_json()
+    async def broadcast(self, message: WsMessage):
+        data = message.model_dump_json()
         for connection in self.active_connections:
             try:
-                await connection.send_text(msg_json)
+                await connection.send_text(data)
             except Exception:
                 pass
 
 local_manager = LocalConnectionManager()
 
-async def broadcast_event(msg: WsMessage):
-    """로컬 UI와 원격 게이트웨이에 동시 브로드캐스트"""
-    # 1. 로컬 UI
-    await local_manager.broadcast(msg)
-    # 2. 게이트웨이 (앱 동기화)
-    await gateway_client.send_message(msg)
+async def broadcast_event(message: WsMessage):
+    """로컬 UI와 게이트웨이 양쪽으로 메시지를 전송합니다."""
+    # 1. 로컬 UI 브로드캐스트
+    await local_manager.broadcast(message)
+    # 2. 게이트웨이 전송 (연결된 경우에만)
+    if not gateway_client.is_local_mode:
+        await gateway_client.send_message(message)
 
 # ==========================================
 # LangGraph 실행 (공통)
@@ -198,6 +209,7 @@ async def handle_gateway_chat(payload: ChatPayload):
     logger.info(f"[GatewayHandler] Received chat. session_id={session_id}")
     
     # 게이트웨이(앱)에서 온 채팅 메시지를 로컬 UI에도 표시 (동기화)
+    # 이미 URL로 변환된 상태이므로 UI에서도 이를 표시할 수 있음
     await local_manager.broadcast(WsMessage(type="chat", payload=payload))
     
     agent = await _get_or_create_agent()
@@ -228,7 +240,7 @@ async def websocket_endpoint(websocket: WebSocket):
     logger.info("[WebSocket] 데스크탑 UI 클라이언트 연결됨")
 
     if gateway_client.is_local_mode:
-        log_payload = LogPayload(status="info", message="서버와 연결되지 않아 로컬 모드로 전환합니다. 대화 내용이 앱과 동기화되지 않습니다.")
+        log_payload = LogPayload(status="info", message="서버와 연결되지 않아 로컬 모드로 전환합니다. 대화 내용이 앱과 동기화되지 않습니다.", session_id="system")
         await websocket.send_text(WsMessage(type="log", payload=log_payload).model_dump_json())
 
     try:
@@ -243,15 +255,27 @@ async def websocket_endpoint(websocket: WebSocket):
                     session_id = chat_payload.session_id or str(uuid.uuid4())
                     
                     if not gateway_client.is_local_mode:
+                        # [온라인 모드] 게이트웨이로 보내서 이미지 저장 및 URL 변환 요청
                         await gateway_client.send_message(msg)
+                    else:
+                        # [로컬 모드] 이미지 첨부 여부 확인
+                        if chat_payload.images:
+                            err_payload = LogPayload(
+                                status="error", 
+                                message="❌ 로컬 모드에서는 서버 연결이 없어 이미지를 처리할 수 없습니다.",
+                                session_id=session_id
+                            )
+                            await websocket.send_text(WsMessage(type="log", payload=err_payload).model_dump_json())
+                            continue # 실행 중단 및 다음 메시지 대기
 
-                    agent = await _get_or_create_agent()
-                    config = _make_config(session_id)
-                    current_state = agent.get_state(config)
-                    existing_images = current_state.values.get("uploaded_images", []) if current_state.values else []
-                    
-                    state = await _initial_state(chat_payload, session_id, existing_images)
-                    await execute_agent(session_id, state=state)
+                        # 이미지 없는 경우에만 직접 실행
+                        agent = await _get_or_create_agent()
+                        config = _make_config(session_id)
+                        current_state = agent.get_state(config)
+                        existing_images = current_state.values.get("uploaded_images", []) if current_state.values else []
+                        
+                        state = await _initial_state(chat_payload, session_id, existing_images)
+                        await execute_agent(session_id, state=state)
                     
                 elif msg.type == "approval_response":
                     raw_data = json.loads(raw_msg)
@@ -259,9 +283,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     session_id = app_payload.session_id or "default"
                     
                     if not gateway_client.is_local_mode:
+                        # [온라인 모드] 게이트웨이로 전달
                         await gateway_client.send_message(msg)
-                        
-                    await execute_agent(session_id, command=Command(resume=app_payload.approve))
+                    else:
+                        # [로컬 모드] 직접 처리
+                        await execute_agent(session_id, command=Command(resume=app_payload.approve))
                 
                 elif msg.type == "register":
                     # 데스크탑 UI가 세션 정보를 보내며 등록하는 경우 (필요 시 처리)

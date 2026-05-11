@@ -31,6 +31,28 @@ async def handler(websocket):
                     await websocket.send(json.dumps(test_chat))
                 asyncio.create_task(send_test_chat())
                 
+            elif msg_type == "chat":
+                payload = data.get("payload", {})
+                images = payload.get("images", [])
+                
+                logger.info(f"Chat 수신: {payload.get('message')}")
+                
+                if images and any(not str(img).startswith("http") for img in images):
+                    logger.info("Base64 이미지 감지. URL로 변환하여 에이전트에 반환합니다.")
+                    # 실제 서버라면 여기서 S3 등에 업로드하고 URL을 받음
+                    processed_payload = payload.copy()
+                    processed_payload["images"] = [
+                        f"https://picsum.photos/seed/{i}/800/600" for i in range(len(images))
+                    ]
+                    
+                    response = {
+                        "type": "chat",
+                        "payload": processed_payload
+                    }
+                    await websocket.send(json.dumps(response))
+                else:
+                    logger.info("이미지가 없거나 이미 URL 형식입니다. (에이전트 답변 대기)")
+                
             else:
                 logger.info(f"수신된 메시지: {data}")
                 
