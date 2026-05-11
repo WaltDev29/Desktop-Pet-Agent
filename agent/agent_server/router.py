@@ -60,8 +60,11 @@ async def _get_or_create_agent():
         _agent = await create_agent()
     return _agent
 
+# DB의 UUID 필드와 호환되도록 기본값으로 UUID 형식을 사용함
+DEFAULT_UUID = "00000000-0000-0000-0000-000000000000"
+
 def _make_config(session_id: str) -> dict:
-    user_id = "default"  
+    user_id = DEFAULT_UUID
     return {"configurable": {"thread_id": f"{user_id}:{session_id}"}, "recursion_limit": 50}
 
 async def _initial_state(payload: ChatPayload, session_id: str, existing_images: list = None) -> dict:
@@ -85,7 +88,7 @@ async def _initial_state(payload: ChatPayload, session_id: str, existing_images:
                 })
             else:
                 # Base64 데이터면 기존처럼 업로드 (로컬 모드 대응용)
-                url_data = await upload_image(img, "default", session_id)
+                url_data = await upload_image(img, DEFAULT_UUID, session_id)
                 new_uploaded_urls.append(url_data)
             
     content = payload.message
@@ -221,7 +224,7 @@ async def handle_gateway_chat(payload: ChatPayload):
     await execute_agent(session_id, state=state)
 
 async def handle_gateway_approve(payload: ApprovalResponsePayload):
-    session_id = payload.session_id or "default" 
+    session_id = payload.session_id or DEFAULT_UUID
     logger.info(f"[GatewayHandler] Received approve={payload.approve} for session={session_id}")
     
     # 게이트웨이(앱)에서 온 승인 여부를 로컬 UI에도 표시 (동기화)
@@ -280,7 +283,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 elif msg.type == "approval_response":
                     raw_data = json.loads(raw_msg)
                     app_payload = ApprovalResponsePayload.model_validate(raw_data.get("payload", {}))
-                    session_id = app_payload.session_id or "default"
+                    session_id = app_payload.session_id or DEFAULT_UUID
                     
                     if not gateway_client.is_local_mode:
                         # [온라인 모드] 게이트웨이로 전달

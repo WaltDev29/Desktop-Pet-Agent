@@ -38,12 +38,14 @@ class GatewayClient:
         self._listen_task = None
 
         api_server = os.getenv("API_SERVER", "")
+        # DB의 UUID 필드와 호환되도록 기본값으로 UUID 형식을 사용함
+        user_id = os.getenv("USER_ID", "00000000-0000-0000-0000-000000000000")
         if api_server.startswith("http://"):
-            self.gateway_url = api_server.replace("http://", "ws://", 1) + "/ws"
+            self.gateway_url = f"{api_server.replace('http://', 'ws://', 1)}/ws/{user_id}"
         elif api_server.startswith("https://"):
-            self.gateway_url = api_server.replace("https://", "wss://", 1) + "/ws"
+            self.gateway_url = f"{api_server.replace('https://', 'wss://', 1)}/ws/{user_id}"
         else:
-            self.gateway_url = "ws://localhost:8080/ws"
+            self.gateway_url = f"ws://localhost:8080/ws/{user_id}"
             
         self.chat_handler = None
         self.approve_handler = None
