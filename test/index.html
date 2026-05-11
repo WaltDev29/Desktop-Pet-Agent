@@ -441,6 +441,14 @@
                         appendMessage(data.final_message, "agent");
                     }
                 }
+                // 5. 채팅 메시지 동기화 (chat) - 외부(앱)에서 온 메시지 표시
+                else if (type === "chat") {
+                    appendMessage(data.message, "user", data.images || []);
+                }
+                // 6. 승인 결과 동기화 (approval_response) - 외부(앱)에서 처리한 결과 표시
+                else if (type === "approval_response") {
+                    appendMessage(data.approve ? "✅ 승인합니다. (앱에서 승인됨)" : "❌ 거절합니다. (앱에서 거절됨)", "user");
+                }
             };
 
             ws.onclose = () => {

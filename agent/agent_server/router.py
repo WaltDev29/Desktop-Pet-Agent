@@ -196,6 +196,9 @@ async def handle_gateway_chat(payload: ChatPayload):
     session_id = "default_session"  # MVP용 고정 세션
     logger.info(f"[GatewayHandler] Received chat.")
     
+    # 게이트웨이(앱)에서 온 채팅 메시지를 로컬 UI에도 표시 (동기화)
+    await local_manager.broadcast(WsMessage(type="chat", payload=payload))
+    
     agent = await _get_or_create_agent()
     config = _make_config(session_id)
     current_state = agent.get_state(config)
@@ -207,6 +210,10 @@ async def handle_gateway_chat(payload: ChatPayload):
 async def handle_gateway_approve(payload: ApprovalResponsePayload):
     session_id = "default_session" 
     logger.info(f"[GatewayHandler] Received approve={payload.approve}")
+    
+    # 게이트웨이(앱)에서 온 승인 여부를 로컬 UI에도 표시 (동기화)
+    await local_manager.broadcast(WsMessage(type="approval_response", payload=payload))
+    
     await execute_agent(session_id, command=Command(resume=payload.approve))
 
 
