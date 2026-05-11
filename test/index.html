@@ -571,7 +571,8 @@
             ws.send(JSON.stringify({
                 type: "approval_response",
                 payload: {
-                    approve: approve
+                    approve: approve,
+                    session_id: currentSessionId
                 }
             }));
         }
@@ -599,7 +600,8 @@
                 type: "chat",
                 payload: {
                     message: text || "이미지를 분석해줘.",
-                    images: currentImages
+                    images: currentImages,
+                    session_id: currentSessionId
                 }
             }));
         }

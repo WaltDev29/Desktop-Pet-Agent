@@ -10,6 +10,7 @@ import uuid
 class BasePayload(BaseModel):
     """모든 웹소켓 메시지 payload의 공통 필드"""
     message_id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="메시지 고유 식별자")
+    session_id: Optional[str] = Field(None, description="대화 세션 ID (LangGraph thread_id 매핑용)")
     timestamp: datetime = Field(default_factory=datetime.now, description="메시지 발생 시간")
 
 MessageType = Literal[

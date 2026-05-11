@@ -149,14 +149,14 @@ async def execute_agent(session_id: str, state=None, command=None):
                 if langgraph_node and langgraph_node == node_name and not node_name.startswith("__") and node_name != "tools":
                     # 새로운 노드(단계) 시작 시 새로운 message_id 생성
                     current_msg_id = str(uuid.uuid4())
-                    log_payload = LogPayload(status="node_start", node=node_name, message_id=current_msg_id)
+                    log_payload = LogPayload(status="node_start", node=node_name, message_id=current_msg_id, session_id=session_id)
                     await broadcast_event(WsMessage(type="log", payload=log_payload))
                     
             elif kind == "on_chat_model_stream":
                 chunk = event["data"].get("chunk")
                 if chunk and chunk.content and isinstance(chunk.content, str):
                     # 현재 노드의 흐름에 속한 토큰들은 동일한 message_id 공유
-                    token_payload = TokenPayload(chunk=chunk.content, message_id=current_msg_id)
+                    token_payload = TokenPayload(chunk=chunk.content, message_id=current_msg_id, session_id=session_id)
                     await broadcast_event(WsMessage(type="token", payload=token_payload))
 
             elif kind == "on_tool_start":
@@ -164,7 +164,7 @@ async def execute_agent(session_id: str, state=None, command=None):
                 tool_msg_id = str(uuid.uuid4())
                 tool_name = event.get("name", "")
                 tool_input = event["data"].get("input", "")
-                log_payload = LogPayload(status="tool_start", tool_name=tool_name, tool_input=tool_input, message_id=tool_msg_id)
+                log_payload = LogPayload(status="tool_start", tool_name=tool_name, tool_input=tool_input, message_id=tool_msg_id, session_id=session_id)
                 await broadcast_event(WsMessage(type="log", payload=log_payload))
 
         final_state = agent.get_state(config)
@@ -175,26 +175,27 @@ async def execute_agent(session_id: str, state=None, command=None):
                 tool_call_id=interrupt_data["tool_call_id"],
                 tool_name=interrupt_data["tool_name"],
                 tool_args=interrupt_data["tool_args"],
-                message=f"⚠️ 위험한 작업 감지\n도구: {interrupt_data['tool_name']}\n실행을 허용하시겠습니까?"
+                message=f"⚠️ 위험한 작업 감지\n도구: {interrupt_data['tool_name']}\n실행을 허용하시겠습니까?",
+                session_id=session_id
             )
             await broadcast_event(WsMessage(type="approval_request", payload=app_payload))
         else:
-            done_payload = DonePayload(final_message="")
+            done_payload = DonePayload(final_message="", session_id=session_id)
             await broadcast_event(WsMessage(type="done", payload=done_payload))
 
     except Exception as e:
         import traceback
         trace = traceback.format_exc()
         logger.error(f"[Agent] 에이전트 실행 오류:\n{trace}")
-        error_payload = LogPayload(status="error", message=f"에이전트 실행 실패: {e}")
+        error_payload = LogPayload(status="error", message=f"에이전트 실행 실패: {e}", session_id=session_id)
         await broadcast_event(WsMessage(type="log", payload=error_payload))
 
 # ==========================================
 # Gateway로부터의 핸들러 (App -> Gateway -> Agent)
 # ==========================================
 async def handle_gateway_chat(payload: ChatPayload):
-    session_id = "default_session"  # MVP용 고정 세션
-    logger.info(f"[GatewayHandler] Received chat.")
+    session_id = payload.session_id or str(uuid.uuid4())
+    logger.info(f"[GatewayHandler] Received chat. session_id={session_id}")
     
     # 게이트웨이(앱)에서 온 채팅 메시지를 로컬 UI에도 표시 (동기화)
     await local_manager.broadcast(WsMessage(type="chat", payload=payload))
@@ -208,8 +209,8 @@ async def handle_gateway_chat(payload: ChatPayload):
     await execute_agent(session_id, state=state)
 
 async def handle_gateway_approve(payload: ApprovalResponsePayload):
-    session_id = "default_session" 
-    logger.info(f"[GatewayHandler] Received approve={payload.approve}")
+    session_id = payload.session_id or "default" 
+    logger.info(f"[GatewayHandler] Received approve={payload.approve} for session={session_id}")
     
     # 게이트웨이(앱)에서 온 승인 여부를 로컬 UI에도 표시 (동기화)
     await local_manager.broadcast(WsMessage(type="approval_response", payload=payload))
@@ -239,11 +240,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 if msg.type == "chat":
                     raw_data = json.loads(raw_msg)
                     chat_payload = ChatPayload.model_validate(raw_data.get("payload", {}))
+                    session_id = chat_payload.session_id or str(uuid.uuid4())
                     
                     if not gateway_client.is_local_mode:
                         await gateway_client.send_message(msg)
 
-                    session_id = "default_session"
                     agent = await _get_or_create_agent()
                     config = _make_config(session_id)
                     current_state = agent.get_state(config)
@@ -255,15 +256,20 @@ async def websocket_endpoint(websocket: WebSocket):
                 elif msg.type == "approval_response":
                     raw_data = json.loads(raw_msg)
                     app_payload = ApprovalResponsePayload.model_validate(raw_data.get("payload", {}))
+                    session_id = app_payload.session_id or "default"
                     
                     if not gateway_client.is_local_mode:
                         await gateway_client.send_message(msg)
                         
-                    session_id = "default_session" 
                     await execute_agent(session_id, command=Command(resume=app_payload.approve))
+                
+                elif msg.type == "register":
+                    # 데스크탑 UI가 세션 정보를 보내며 등록하는 경우 (필요 시 처리)
+                    pass
                     
             except Exception as e:
                 logger.error(f"[WebSocket] 메시지 처리 오류: {e}")
+
                 
     except WebSocketDisconnect:
         local_manager.disconnect(websocket)
