@@ -5,12 +5,12 @@ import base64
 import os
 
 from PySide6.QtWidgets import (
-    QWidget, QTextEdit, QVBoxLayout, QPushButton, QHBoxLayout,
+    QWidget, QTextEdit, QTextBrowser, QVBoxLayout, QPushButton, QHBoxLayout,
     QApplication, QFrame, QGraphicsDropShadowEffect, QLabel,
     QFileDialog, QScrollArea, QSizePolicy, QSlider
 )
-from PySide6.QtCore import Qt, Signal, QObject, QRectF, QPoint, QTimer, QEvent, QRect
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap, QCursor
+from PySide6.QtCore import Qt, Signal, QObject, QRectF, QPoint, QTimer, QEvent, QRect, QUrl
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap, QCursor, QDesktopServices
 
 from app.chat_style import (
     CHAT_HISTORY_STYLE, 
@@ -28,7 +28,15 @@ from app.chat_style import (
     ERROR_MSG_FORMAT,
     OPACITY_SLIDER_STYLE,
     OPACITY_LABEL_STYLE,
-    convert_markdown_to_html
+    convert_markdown_to_html,
+    BUBBLE_MAX_HEIGHT,
+    USER_BUBBLE_STYLE,
+    PET_BUBBLE_STYLE,
+    ERROR_BUBBLE_STYLE,
+    CHAT_SCROLL_AREA_STYLE,
+    THINKING_LINK_COLLAPSED,
+    THINKING_LINK_EXPANDED,
+    THINKING_CONTENT_DIV,
 )
 
 class ChatSignaler(QObject):
@@ -228,12 +236,22 @@ class ChatWindow(QWidget):
 
         self.message_history = []
         
-        self.chat_history = QTextEdit()
-        self.chat_history.setReadOnly(True)
-        self.chat_history.setStyleSheet(CHAT_HISTORY_STYLE)
-        self.chat_history.setMaximumHeight(250)
-        self.chat_history.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.chat_history.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        # ── 채팅 스크롤 영역 (개별 말풍선 위젯 방식) ──
+        self.chat_scroll_area = QScrollArea()
+        self.chat_scroll_area.setWidgetResizable(True)
+        self.chat_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.chat_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.chat_scroll_area.setStyleSheet(CHAT_SCROLL_AREA_STYLE)
+
+        self.chat_scroll_content = QWidget()
+        self.chat_scroll_content.setObjectName("chat_scroll_content")
+        self.chat_scroll_layout = QVBoxLayout(self.chat_scroll_content)
+        self.chat_scroll_layout.setContentsMargins(4, 4, 4, 4)
+        self.chat_scroll_layout.setSpacing(2)
+        self.chat_scroll_layout.addStretch()
+
+        self.chat_scroll_area.setWidget(self.chat_scroll_content)
+        self.bubble_widgets: list[QTextBrowser] = []
         
         self.btn_area = QWidget()
         self.btn_layout = QHBoxLayout(self.btn_area)
@@ -310,7 +328,7 @@ class ChatWindow(QWidget):
         bottom_layout.addStretch()
         bottom_layout.addWidget(self.close_btn)
 
-        layout.addWidget(self.chat_history)
+        layout.addWidget(self.chat_scroll_area, 1)
         layout.addWidget(self.btn_area)
         layout.addWidget(self.image_preview_area)
         layout.addWidget(self.input_field)
@@ -339,6 +357,10 @@ class ChatWindow(QWidget):
         self._current_stream_text = ""
         self._current_node_name = None
         self._current_response_index: int | None = None
+
+        # 사고 과정 로그 누적
+        self._thinking_logs: list[str] = []
+        self._thinking_stream_buffer = ""
 
         self.pet_window = pet_window
         self._start_websocket_thread()
@@ -437,17 +459,18 @@ class ChatWindow(QWidget):
 
         # 마크다운을 HTML로 변환
         html_content = convert_markdown_to_html(formatted_text)
-        user_md = USER_MSG_FORMAT.format(text=html_content)
-        self.message_history.append(user_md)
+        user_html = USER_MSG_FORMAT.format(text=html_content)
+        self._add_bubble(user_html, "user")
 
-        thinking_md = PET_MSG_FORMAT.format(text="생각 중...")
-        self._current_response_index = len(self.message_history)
-        self.message_history.append(thinking_md)
+        thinking_html = PET_MSG_FORMAT.format(text="생각 중...")
+        self._current_response_index = len(self.bubble_widgets)
+        self._add_bubble(thinking_html, "pet")
         self._current_node_name = None
         self._streaming = False
         self._current_stream_text = ""
+        self._thinking_logs = []
+        self._thinking_stream_buffer = ""
 
-        self.chat_history.setHtml("".join(self.message_history))
         self.scrollToBottom()
 
         self.input_field.clear()
@@ -457,10 +480,138 @@ class ChatWindow(QWidget):
 
         payload = {"action": "chat", "message": api_message, "images": images}
         self._send_ws_message(payload)
-            
+
+    # ── 말풍선 위젯 헬퍼 ─────────────────────────────────────────
+    def _add_bubble(self, html_content: str, msg_type: str = "pet") -> QTextBrowser:
+        """개별 말풍선 QTextBrowser 위젯을 컨테이너에 담아 추가합니다."""
+        container = QWidget()
+        vbox = QVBoxLayout(container)
+        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.setSpacing(4)
+        vbox.setSizeConstraint(QVBoxLayout.SetFixedSize)
+
+        if msg_type != "error":
+            label = QLabel()
+            label.setStyleSheet("color: #888; font-size: 10px; font-weight: bold; margin-bottom: 2px;")
+            if msg_type == "user":
+                label.setText("나")
+                label.setAlignment(Qt.AlignRight)
+            else:
+                label.setText("🐾 펫")
+                label.setAlignment(Qt.AlignLeft)
+            vbox.addWidget(label)
+
+        bubble = QTextBrowser()
+        bubble.setOpenExternalLinks(False)
+        bubble.anchorClicked.connect(self._on_bubble_link_clicked)
+        bubble.setHtml(html_content)
+        bubble.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        bubble.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        bubble.setProperty("msg_type", msg_type)
+        bubble.document().setDocumentMargin(0)
+
+        if msg_type == "user":
+            bubble.setStyleSheet(USER_BUBBLE_STYLE)
+        elif msg_type == "error":
+            bubble.setStyleSheet(ERROR_BUBBLE_STYLE)
+        else:
+            bubble.setStyleSheet(PET_BUBBLE_STYLE)
+
+        # 크기 조절 (너비: 내용 기반, 최대 70% / 높이: 내용 기반, 최대 BUBBLE_MAX_HEIGHT)
+        self._fit_bubble_size(bubble)
+        vbox.addWidget(bubble)
+
+        # 정렬: 사용자=오른쪽, 펫=왼쪽, 에러=중앙
+        if msg_type == "user":
+            alignment = Qt.AlignRight
+        elif msg_type == "error":
+            alignment = Qt.AlignHCenter
+        else:
+            alignment = Qt.AlignLeft
+
+        # stretch 앞에 컨테이너를 삽입
+        idx = self.chat_scroll_layout.count() - 1
+        self.chat_scroll_layout.insertWidget(idx, container, 0, alignment)
+        self.bubble_widgets.append(bubble)
+        
+        # 삭제 등의 처리를 위해 컨테이너 참조 저장
+        bubble.setProperty("container_widget", container)
+        
+        return bubble
+
+    def _fit_bubble_size(self, bubble: QTextBrowser, max_height: int = None):
+        """말풍선 너비를 내용에 맞추되 최대 70%, 높이도 내용에 맞추되 최대 max_height."""
+        if max_height is None:
+            max_height = BUBBLE_MAX_HEIGHT
+        # 최대 너비 = 채팅 스크롤 영역 폭의 70%
+        scroll_w = self.chat_scroll_area.viewport().width()
+        if scroll_w < 50:
+            scroll_w = self.chat_scroll_area.width() - 20
+        max_w = max(int(scroll_w * 0.7), 100)
+
+        # 문서의 이상적인 너비 계산 (내용에 맞는 최소 너비)
+        bubble.document().setTextWidth(-1)  # 제한 없이 자연 너비 계산
+        ideal_w = int(bubble.document().idealWidth()) + 20  # 여백 보정
+
+        # 너비 결정: min(ideal, max_w), 최소 60px
+        final_w = max(min(ideal_w, max_w), 60)
+        bubble.setFixedWidth(final_w)
+
+        # 높이 계산: 결정된 너비로 문서 재배치 후 높이 측정
+        bubble.document().setTextWidth(final_w)
+        doc_height = int(bubble.document().size().height())
+        if doc_height > max_height:
+            bubble.setFixedHeight(max_height)
+        else:
+            bubble.setFixedHeight(max(doc_height, 30))
+
+    def _update_bubble(self, index: int, html_content: str, msg_type: str = "pet"):
+        """기존 말풍선 위젯의 HTML 내용을 업데이트합니다."""
+        if 0 <= index < len(self.bubble_widgets):
+            bubble = self.bubble_widgets[index]
+            bubble.setHtml(html_content)
+            self._fit_bubble_size(bubble)
+
+    def _flush_thinking_buffer(self):
+        """스트림 버퍼에 쌓인 텍스트를 사고 과정 로그에 추가합니다."""
+        if self._thinking_stream_buffer.strip():
+            self._thinking_logs.append(self._thinking_stream_buffer.strip())
+        self._thinking_stream_buffer = ""
+
+    def _render_thinking_html(self, answer_html_content: str, thinking_html_content: str, expanded: bool) -> str:
+        """사고 과정 토글 + 최종 답변을 하나의 말풍선 HTML로 조합합니다."""
+        link = THINKING_LINK_EXPANDED if expanded else THINKING_LINK_COLLAPSED
+        thinking_section = THINKING_CONTENT_DIV.format(content=thinking_html_content) if expanded else ""
+        combined_text = f"{link}{thinking_section}{answer_html_content}"
+        return PET_MSG_FORMAT.format(text=combined_text)
+
+    def _on_bubble_link_clicked(self, url: QUrl):
+        """말풍선 내 링크 클릭 처리. 사고과정 토글 또는 외부 링크."""
+        url_str = url.toString()
+        if url_str == "action:toggle_thinking":
+            bubble = self.sender()
+            if bubble is None:
+                return
+            expanded = bubble.property("thinking_expanded") or False
+            expanded = not expanded
+            bubble.setProperty("thinking_expanded", expanded)
+
+            answer_html = bubble.property("answer_html_content") or ""
+            thinking_html = bubble.property("thinking_html_content") or ""
+            new_html = self._render_thinking_html(answer_html, thinking_html, expanded)
+            bubble.setHtml(new_html)
+
+            # 펼친 상태에서는 높이 제한을 해제 (매우 큰 값으로 설정)
+            max_h = 10000 if expanded else BUBBLE_MAX_HEIGHT
+            self._fit_bubble_size(bubble, max_height=max_h)
+            self.scrollToBottom()
+        else:
+            QDesktopServices.openUrl(url)
+
     def scrollToBottom(self):
-        scrollbar = self.chat_history.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+        QTimer.singleShot(50, lambda: self.chat_scroll_area.verticalScrollBar().setValue(
+            self.chat_scroll_area.verticalScrollBar().maximum()
+        ))
     
     def _start_websocket_thread(self):
         thread = threading.Thread(target=self._websocket_worker, daemon=True)
@@ -531,19 +682,30 @@ class ChatWindow(QWidget):
         elif status == "node_start":
             node_name = data.get("node", "")
             self._current_node_name = node_name
-            if self._current_response_index is not None and 0 <= self._current_response_index < len(self.message_history):
+            self._flush_thinking_buffer()
+            if self._current_response_index is not None and 0 <= self._current_response_index < len(self.bubble_widgets):
                 if node_name == "aggregator":
-                    self.message_history[self._current_response_index] = PET_MSG_FORMAT.format(text="답변 생성 중...")
+                    self._update_bubble(self._current_response_index, PET_MSG_FORMAT.format(text="답변 생성 중..."))
                 else:
-                    self.message_history[self._current_response_index] = PET_MSG_FORMAT.format(text="생각 중...")
-                self.chat_history.setHtml("".join(self.message_history))
+                    self._thinking_logs.append(f"[⚙️ {node_name} 동작 중...]")
+                    self._update_bubble(self._current_response_index, PET_MSG_FORMAT.format(text="생각 중..."))
                 self.scrollToBottom()
             return
 
         elif status == "tool_start":
-            if self._current_response_index is not None and 0 <= self._current_response_index < len(self.message_history):
-                self.message_history[self._current_response_index] = PET_MSG_FORMAT.format(text="도구 실행 중...")
-                self.chat_history.setHtml("".join(self.message_history))
+            self._flush_thinking_buffer()
+            tool_name = data.get("tool_name", "unknown")
+            tool_input = data.get("tool_input", "")
+            if isinstance(tool_input, dict):
+                tool_input_str = json.dumps(tool_input, ensure_ascii=False)
+            else:
+                tool_input_str = str(tool_input) if tool_input else ""
+            log_entry = f"[🛠️ 도구 호출: {tool_name}]"
+            if tool_input_str:
+                log_entry += f" 파라미터: {tool_input_str}"
+            self._thinking_logs.append(log_entry)
+            if self._current_response_index is not None and 0 <= self._current_response_index < len(self.bubble_widgets):
+                self._update_bubble(self._current_response_index, PET_MSG_FORMAT.format(text="도구 실행 중..."))
                 self.scrollToBottom()
             return
 
@@ -554,41 +716,56 @@ class ChatWindow(QWidget):
                     self._streaming = True
                     self._current_stream_text = ""
                 self._current_stream_text += chunk
-                if self._current_response_index is not None and 0 <= self._current_response_index < len(self.message_history):
+                if self._current_response_index is not None and 0 <= self._current_response_index < len(self.bubble_widgets):
                     # 마크다운을 HTML로 변환
                     html_reply = convert_markdown_to_html(self._current_stream_text)
-                    self.message_history[self._current_response_index] = PET_MSG_FORMAT.format(text=html_reply)
-                    self.chat_history.setHtml("".join(self.message_history))
+                    self._update_bubble(self._current_response_index, PET_MSG_FORMAT.format(text=html_reply))
                     self.scrollToBottom()
             else:
-                # Aggregator 이전 노드의 스트림은 화면에 그대로 노출하지 않음
-                if self._current_response_index is not None and 0 <= self._current_response_index < len(self.message_history):
-                    self.message_history[self._current_response_index] = PET_MSG_FORMAT.format(text="생각 중...")
-                    self.chat_history.setHtml("".join(self.message_history))
+                # Aggregator 이전 노드의 스트림은 화면에 그대로 노출하지 않고 버퍼에 누적
+                self._thinking_stream_buffer += chunk
+                if self._current_response_index is not None and 0 <= self._current_response_index < len(self.bubble_widgets):
+                    self._update_bubble(self._current_response_index, PET_MSG_FORMAT.format(text="생각 중..."))
                     self.scrollToBottom()
             return
 
         elif status == "stream_end" or status == "success":
             if self._current_node_name == "aggregator":
+                self._flush_thinking_buffer()
                 if self._streaming:
                     self._streaming = False
                     formatted_reply = self._current_stream_text
                 else:
                     reply = data.get("response") or data.get("message") or ""
                     formatted_reply = reply if reply else "생각 중..."
-                if self._current_response_index is not None and 0 <= self._current_response_index < len(self.message_history):
-                    # 마크다운을 HTML로 변환
-                    html_reply = convert_markdown_to_html(formatted_reply)
-                    self.message_history[self._current_response_index] = PET_MSG_FORMAT.format(text=html_reply)
+
+                html_reply = convert_markdown_to_html(formatted_reply)
+
+                # 사고 과정이 있으면 말풍선 내부에 토글 링크 포함
+                if self._thinking_logs and self._current_response_index is not None \
+                        and 0 <= self._current_response_index < len(self.bubble_widgets):
+                    thinking_content = "\n".join(self._thinking_logs)
+                    thinking_html = convert_markdown_to_html(thinking_content)
+                    full_html = self._render_thinking_html(html_reply, thinking_html, expanded=False)
+                    bubble = self.bubble_widgets[self._current_response_index]
+                    bubble.setProperty("answer_html_content", html_reply)
+                    bubble.setProperty("thinking_html_content", thinking_html)
+                    bubble.setProperty("thinking_expanded", False)
+                    bubble.setHtml(full_html)
+                    self._fit_bubble_size(bubble)
+                elif self._current_response_index is not None and 0 <= self._current_response_index < len(self.bubble_widgets):
+                    self._update_bubble(self._current_response_index, PET_MSG_FORMAT.format(text=html_reply))
                 else:
-                    self.message_history.append(PET_MSG_FORMAT.format(text=formatted_reply))
-                self.chat_history.setHtml("".join(self.message_history))
+                    self._add_bubble(PET_MSG_FORMAT.format(text=html_reply), "pet")
                 self.scrollToBottom()
                 self._current_stream_text = ""
+                self._thinking_logs = []
+                self._thinking_stream_buffer = ""
             else:
                 # Aggregator 외 내부 노드가 끝난 경우, 기존 thinking placeholder 유지
                 self._streaming = False
                 self._current_stream_text = ""
+                self._flush_thinking_buffer()
             if data.get("session_id"):
                 self.session_id = data["session_id"]
             self._current_node_name = None
@@ -602,8 +779,7 @@ class ChatWindow(QWidget):
             # 마크다운을 HTML로 변환
             html_reply = convert_markdown_to_html(reply)
             pet_html = PET_MSG_FORMAT.format(text=html_reply)
-            self.message_history.append(pet_html)
-            self.chat_history.setHtml("".join(self.message_history))
+            self._add_bubble(pet_html, "pet")
             self.scrollToBottom()
 
         if data.get("session_id"): 
@@ -627,16 +803,17 @@ class ChatWindow(QWidget):
         user_text = f"[{choice_text}] 하겠어."
         html_user_text = convert_markdown_to_html(user_text)
         user_msg = USER_MSG_FORMAT.format(text=html_user_text)
-        self.message_history.append(user_msg)
+        self._add_bubble(user_msg, "user")
 
-        thinking_md = PET_MSG_FORMAT.format(text="결과를 서버에 전달하는 중...")
-        self._current_response_index = len(self.message_history)
-        self.message_history.append(thinking_md)
+        thinking_html = PET_MSG_FORMAT.format(text="결과를 서버에 전달하는 중...")
+        self._current_response_index = len(self.bubble_widgets)
+        self._add_bubble(thinking_html, "pet")
         self._current_node_name = None
         self._streaming = False
         self._current_stream_text = ""
+        self._thinking_logs = []
+        self._thinking_stream_buffer = ""
 
-        self.chat_history.setHtml("".join(self.message_history))
         self.scrollToBottom()
 
         payload = {
@@ -652,13 +829,27 @@ class ChatWindow(QWidget):
         # 마크다운 변환 (일관성 유지)
         html_error = convert_markdown_to_html(safe_error)
         error_msg = ERROR_MSG_FORMAT.format(text=html_error)
-        self.message_history.append(error_msg)
-        self.chat_history.setHtml("".join(self.message_history))
+        self._add_bubble(error_msg, "error")
         self.scrollToBottom()
         
         self.input_field.setEnabled(True)
         self.attach_btn.setEnabled(True)
         self.input_field.setFocus()
+
+    # ── 반응형 리사이즈 ──────────────────────────────────────────
+    def resizeEvent(self, event):
+        """창 크기 변경 시 내부 말풍선 및 사고 과정 위젯 크기를 재계산합니다."""
+        super().resizeEvent(event)
+        scroll_w = self.chat_scroll_area.viewport().width()
+        if scroll_w < 50:
+            scroll_w = self.chat_scroll_area.width() - 20
+        max_w = max(int(scroll_w * 0.7), 100)
+
+        # 일반 말풍선 크기 재계산
+        for bubble in self.bubble_widgets:
+            expanded = bubble.property("thinking_expanded") or False
+            max_h = BUBBLE_MAX_HEIGHT * 2 if expanded else BUBBLE_MAX_HEIGHT
+            self._fit_bubble_size(bubble, max_height=max_h)
 
     # ── 드래그 이동 ───────────────────────────────────────────
     def _on_drag_started(self, cursor_global: QPoint):
