@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent Chat UI (with Image)</title>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1a1a1a;
+            color: #fff;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        #chat-container {
+            width: 100%;
+            max-width: 600px;
+            background-color: #2a2a2a;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        #chat-box {
+            flex-grow: 1;
+            min-height: 400px;
+            max-height: 600px;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .message {
+            padding: 12px 16px;
+            border-radius: 8px;
+            max-width: 80%;
+            line-height: 1.5;
+            word-wrap: break-word;
+        }
+
+        .message.user {
+            align-self: flex-end;
+            background-color: #4a90e2;
+        }
+
+        .message.agent {
+            align-self: flex-start;
+            background-color: #444;
+        }
+
+        .message img {
+            max-width: 100%;
+            border-radius: 8px;
+            margin-top: 8px;
+            display: block;
+        }
+
+        #input-container {
+            padding: 15px;
+            background-color: #333;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        #image-preview-container {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .image-preview {
+            width: 60px;
+            height: 60px;
+            object-fit: cover;
+            border-radius: 8px;
+            border: 2px solid #555;
+            position: relative;
+        }
+
+        .preview-wrapper {
+            position: relative;
+            display: inline-block;
+        }
+
+        .remove-btn {
+            position: absolute;
+            top: -5px;
+            right: -5px;
+            background: red;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+            font-size: 12px;
+            line-height: 12px;
+            padding: 0;
+        }
+
+        .input-row {
+            display: flex;
+            gap: 10px;
+        }
+
+        input[type="text"] {
+            flex-grow: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            background-color: #444;
+            color: white;
+            outline: none;
+        }
+
+        button {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 8px;
+            background-color: #4a90e2;
+            color: white;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background-color: #357abd;
+        }
+
+        button:disabled {
+            background-color: #555;
+            cursor: not-allowed;
+        }
+
+        #file-input {
+            display: none;
+        }
+
+        .upload-btn {
+            background-color: #555;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .upload-btn:hover {
+            background-color: #666;
+        }
+
+        .loader {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            width: 14px;
+            height: 14px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .thought-log {
+            max-height: 150px;
+            overflow-y: auto;
+            font-size: 0.85em;
+            color: #ddd;
+            background-color: #333;
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            white-space: pre-wrap;
+            font-family: monospace;
+        }
+
+        .thought-toggle {
+            margin-bottom: 10px;
+            background-color: #333;
+            border-radius: 6px;
+            padding: 10px;
+        }
+
+        .thought-toggle summary {
+            cursor: pointer;
+            font-weight: bold;
+            color: #4a90e2;
+            font-size: 0.9em;
+            outline: none;
+        }
+
+        .thought-content {
+            margin-top: 10px;
+            font-size: 0.85em;
+            color: #ddd;
+            white-space: pre-wrap;
+            font-family: monospace;
+        }
+
+        .final-response {
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="main-layout" style="display: flex; gap: 20px; width: 100%; max-width: 900px; height: 80vh;">
+        <!-- Sidebar for Sessions -->
+        <div id="sidebar"
+            style="width: 250px; background-color: #2a2a2a; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 10px;">
+            <button onclick="createNewSession()" style="background-color: #28a745; width: 100%;">새 대화 시작 ➕</button>
+            <button onclick="deleteCurrentSession()" style="background-color: #dc3545; width: 100%;">현재 세션 삭제
+                🗑️</button>
+            <hr style="border-color: #444; width: 100%;">
+            <div id="session-list"
+                style="display: flex; flex-direction: column; gap: 8px; overflow-y: auto; flex-grow: 1;">
+                <!-- 세션 리스트 렌더링 영역 -->
+            </div>
+        </div>
+
+        <div id="chat-container" style="flex-grow: 1; max-width: 600px; height: 100%;">
+            <div id="chat-box" style="max-height: calc(100% - 130px);">
+                <div class="message agent">안녕하세요! 에이전트입니다. 궁금한 점이 있거나 이미지를 분석해보고 싶으시면 말씀해주세요.</div>
+            </div>
+            <div id="input-container">
+                <div id="image-preview-container"></div>
+                <div class="input-row">
+                    <button class="upload-btn" onclick="document.getElementById('file-input').click()">업로드 🖼️</button>
+                    <input type="file" id="file-input" accept="image/*" multiple>
+                    <input type="text" id="message-input" placeholder="메시지를 입력하세요..."
+                        onkeypress="if(event.key === 'Enter') sendMessage()">
+                    <button id="send-btn" onclick="sendMessage()">전송</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 모바일 앱은 Agent 서버가 아닌 Gateway 서버(기본 8000포트, docker-compose 기준 80포트)에 직접 연결합니다.
+        // 테스트를 위해 기본 유저 UUID인 00000000-0000-0000-0000-000000000000를 사용합니다.
+        const API_URL = "ws://localhost:80/ws/00000000-0000-0000-0000-000000000000";
+        const fileInput = document.getElementById('file-input');
+        const previewContainer = document.getElementById('image-preview-container');
+        const messageInput = document.getElementById('message-input');
+        const chatBox = document.getElementById('chat-box');
+        const sendBtn = document.getElementById('send-btn');
+
+        let selectedImages = []; // base64 strings
+        let currentSessionId = localStorage.getItem('app_session_id');
+        let sessionList = JSON.parse(localStorage.getItem('app_sessions_list') || "[]");
+        let ws = null;
+        let currentMessageDiv = null;
+        let thoughtLogDiv = null;
+        let finalResponseDiv = null;
+
+        // 세션 리스트 UI 갱신 로직 추가
+        function updateSessionStorage() {
+            if (currentSessionId && !sessionList.includes(currentSessionId)) {
+                sessionList.push(currentSessionId);
+            }
+            localStorage.setItem('app_sessions_list', JSON.stringify(sessionList));
+            renderSessionList();
+        }
+
+        function renderSessionList() {
+            const listDiv = document.getElementById('session-list');
+            listDiv.innerHTML = '';
+            sessionList.forEach(sid => {
+                const btn = document.createElement('button');
+                btn.innerText = "세션: " + sid.substring(0, 6) + "...";
+                btn.style.width = "100%";
+                btn.style.textAlign = "left";
+                btn.style.backgroundColor = (sid === currentSessionId) ? "#4a90e2" : "#444";
+                btn.onclick = () => {
+                    currentSessionId = sid;
+                    localStorage.setItem('app_session_id', sid);
+                    chatBox.innerHTML = '<div class="message agent">기존 세션(' + sid.substring(0, 6) + ')으로 전환되었습니다.</div>';
+                    renderSessionList();
+                };
+                listDiv.appendChild(btn);
+            });
+        }
+
+        function createNewSession() {
+            currentSessionId = crypto.randomUUID();
+            localStorage.setItem('app_session_id', currentSessionId);
+            chatBox.innerHTML = '<div class="message agent">새로운 대화 세션이 시작되었습니다.</div>';
+            updateSessionStorage();
+        }
+
+        function deleteCurrentSession() {
+            if (!currentSessionId) return;
+            sessionList = sessionList.filter(s => s !== currentSessionId);
+            localStorage.setItem('app_sessions_list', JSON.stringify(sessionList));
+
+            chatBox.innerHTML = '<div class="message agent">진행 중이던 세션이 완전히 폐기되었습니다. 우측 상단에서 새 대화를 시작해주세요.</div>';
+            currentSessionId = sessionList.length > 0 ? sessionList[sessionList.length - 1] : null;
+            if (currentSessionId) localStorage.setItem('app_session_id', currentSessionId);
+            else localStorage.removeItem('app_session_id');
+            renderSessionList();
+        }
+
+        renderSessionList();
+
+        function connectWebSocket() {
+            ws = new WebSocket(API_URL);
+
+            ws.onopen = () => {
+                appendMessage("게이트웨이 서버와 연결되었습니다. 🟢", "agent");
+                // 모바일 앱 역할로 등록 (client_id 필수)
+                ws.send(JSON.stringify({
+                    type: "register",
+                    payload: {
+                        role: "app",
+                        client_id: "test_app_1"
+                    }
+                }));
+            };
+
+            ws.onmessage = (event) => {
+                const msg = JSON.parse(event.data);
+                const type = msg.type;
+                const data = msg.payload; // Payload 객체
+
+                // 1. 승인 요청 (approval_request)
+                if (type === "approval_request") {
+                    currentMessageDiv = null;
+                    thoughtLogDiv = null;
+                    finalResponseDiv = null;
+                    appendMessage(`⚠️ 승인 필요: ${data.message}`, "agent");
+                    renderApprovalButtons();
+                }
+                // 2. 로그 (log)
+                else if (type === "log") {
+                    const status = data.status;
+
+                    if (status === "error") {
+                        currentMessageDiv = null;
+                        thoughtLogDiv = null;
+                        finalResponseDiv = null;
+                        appendMessage(`❌ 에러: ${data.message}`, "agent");
+                        resetSendButton();
+                    } else if (status === "info") {
+                        appendMessage(`ℹ️ 안내: ${data.message}`, "agent");
+                    } else if (status === "node_start") {
+                        const nodeName = data.node;
+
+                        if (!currentMessageDiv) {
+                            currentMessageDiv = appendMessage("", "agent");
+                            currentMessageDiv.innerText = ""; // 초기화
+                            thoughtLogDiv = document.createElement("div");
+                            thoughtLogDiv.className = "thought-log";
+                            currentMessageDiv.appendChild(thoughtLogDiv);
+                        }
+
+                        if (nodeName === "aggregator") {
+                            if (thoughtLogDiv && !thoughtLogDiv.classList.contains("finalized")) {
+                                const details = document.createElement("details");
+                                details.className = "thought-toggle";
+                                const summary = document.createElement("summary");
+                                summary.innerText = "사고 과정 보기";
+                                const contentDiv = document.createElement("div");
+                                contentDiv.className = "thought-content";
+                                contentDiv.innerText = thoughtLogDiv.innerText;
+
+                                details.appendChild(summary);
+                                details.appendChild(contentDiv);
+
+                                currentMessageDiv.replaceChild(details, thoughtLogDiv);
+                                thoughtLogDiv = null;
+                            }
+
+                            finalResponseDiv = document.createElement("div");
+                            finalResponseDiv.className = "final-response";
+                            currentMessageDiv.appendChild(finalResponseDiv);
+                            chatBox.scrollTop = chatBox.scrollHeight;
+                        } else {
+                            if (thoughtLogDiv) {
+                                thoughtLogDiv.innerText += `\n[⚙️ ${nodeName} 동작 중...]\n`;
+                                thoughtLogDiv.scrollTop = thoughtLogDiv.scrollHeight;
+                            }
+                            chatBox.scrollTop = chatBox.scrollHeight;
+                        }
+                    } else if (status === "tool_start") {
+                        if (!currentMessageDiv) {
+                            currentMessageDiv = appendMessage("", "agent");
+                            currentMessageDiv.innerText = "";
+                            thoughtLogDiv = document.createElement("div");
+                            thoughtLogDiv.className = "thought-log";
+                            currentMessageDiv.appendChild(thoughtLogDiv);
+                        }
+                        const toolInputStr = typeof data.tool_input === 'object' ? JSON.stringify(data.tool_input) : data.tool_input;
+                        if (thoughtLogDiv) {
+                            thoughtLogDiv.innerText += `\n[🛠️ 도구 호출: ${data.tool_name}] 파라미터: ${toolInputStr}\n`;
+                            thoughtLogDiv.scrollTop = thoughtLogDiv.scrollHeight;
+                        }
+                        chatBox.scrollTop = chatBox.scrollHeight;
+                    }
+                }
+                // 3. 토큰 (token)
+                else if (type === "token") {
+                    if (!currentMessageDiv) {
+                        currentMessageDiv = appendMessage("", "agent");
+                        currentMessageDiv.innerText = "";
+                        thoughtLogDiv = document.createElement("div");
+                        thoughtLogDiv.className = "thought-log";
+                        currentMessageDiv.appendChild(thoughtLogDiv);
+                    }
+
+                    if (finalResponseDiv) {
+                        finalResponseDiv.innerText += data.chunk;
+                    } else if (thoughtLogDiv) {
+                        thoughtLogDiv.innerText += data.chunk;
+                        thoughtLogDiv.scrollTop = thoughtLogDiv.scrollHeight;
+                    }
+                    chatBox.scrollTop = chatBox.scrollHeight;
+                }
+                // 4. 완료 (done)
+                else if (type === "done") {
+                    currentMessageDiv = null;
+                    thoughtLogDiv = null;
+                    finalResponseDiv = null;
+                    resetSendButton();
+                    if (data.final_message) {
+                        appendMessage(data.final_message, "agent");
+                    }
+                }
+                // 5. 채팅 메시지 동기화 (chat) - 외부(앱)에서 온 메시지 표시
+                else if (type === "chat") {
+                    const msgId = data.message_id;
+                    if (window.sentMessageIds && window.sentMessageIds.has(msgId)) {
+                        // 내가 전송했던 메시지가 돌아온 것이므로 화면에 중복 출력하지 않음
+                        return;
+                    }
+                    appendMessage(data.message, "user", data.images || []);
+                }
+                // 6. 승인 결과 동기화 (approval_response) - 외부(앱)에서 처리한 결과 표시
+                else if (type === "approval_response") {
+                    appendMessage(data.approve ? "✅ 승인합니다. (앱에서 승인됨)" : "❌ 거절합니다. (앱에서 거절됨)", "user");
+                }
+            };
+
+            ws.onclose = () => {
+                currentMessageDiv = null;
+                thoughtLogDiv = null;
+                finalResponseDiv = null;
+                appendMessage("서버와의 연결이 끊어졌습니다. 새로고침 해주세요. 🔴", "agent");
+                resetSendButton();
+            };
+
+            ws.onerror = (error) => {
+                console.error("WebSocket Error:", error);
+            };
+        }
+
+        // 초기 웹소켓 연결
+        connectWebSocket();
+
+        function resetSendButton() {
+            sendBtn.disabled = false;
+            sendBtn.innerText = '전송';
+        }
+
+        fileInput.addEventListener('change', async (e) => {
+            const files = Array.from(e.target.files);
+            if (selectedImages.length + files.length > 3) {
+                alert("이미지는 최대 3개까지만 업로드 가능합니다.");
+                return;
+            }
+
+            for (const file of files) {
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const base64 = event.target.result;
+                    selectedImages.push(base64);
+                    renderPreviews();
+                };
+                reader.readAsDataURL(file);
+            }
+            fileInput.value = ''; // reset 
+        });
+
+        function renderPreviews() {
+            previewContainer.innerHTML = '';
+            selectedImages.forEach((imgBase64, index) => {
+                const wrapper = document.createElement('div');
+                wrapper.className = 'preview-wrapper';
+
+                const img = document.createElement('img');
+                img.src = imgBase64;
+                img.className = 'image-preview';
+
+                const btn = document.createElement('button');
+                btn.className = 'remove-btn';
+                btn.innerText = 'X';
+                btn.onclick = () => {
+                    selectedImages.splice(index, 1);
+                    renderPreviews();
+                };
+
+                wrapper.appendChild(img);
+                wrapper.appendChild(btn);
+                previewContainer.appendChild(wrapper);
+            });
+        }
+
+        function appendMessage(text, role, images = []) {
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `message ${role}`;
+            msgDiv.innerText = text;
+
+            images.forEach(imgBase64 => {
+                const img = document.createElement('img');
+                img.src = imgBase64;
+                msgDiv.appendChild(img);
+            });
+
+            chatBox.appendChild(msgDiv);
+            chatBox.scrollTop = chatBox.scrollHeight;
+            return msgDiv;
+        }
+
+        function renderApprovalButtons() {
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `message user`;
+            msgDiv.style.backgroundColor = "transparent";
+            msgDiv.style.display = "flex";
+            msgDiv.style.gap = "10px";
+
+            const approveBtn = document.createElement('button');
+            approveBtn.innerText = '✅ 승인 (True)';
+            approveBtn.style.backgroundColor = '#28a745';
+            approveBtn.onclick = () => {
+                msgDiv.remove();
+                handleApprove(true);
+            };
+
+            const rejectBtn = document.createElement('button');
+            rejectBtn.innerText = '❌ 거절 (False)';
+            rejectBtn.style.backgroundColor = '#dc3545';
+            rejectBtn.onclick = () => {
+                msgDiv.remove();
+                handleApprove(false);
+            };
+
+            msgDiv.appendChild(approveBtn);
+            msgDiv.appendChild(rejectBtn);
+            chatBox.appendChild(msgDiv);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        function handleApprove(approve) {
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+            appendMessage(approve ? "✅ 승인합니다." : "❌ 거절합니다.", "user");
+
+            sendBtn.disabled = true;
+            sendBtn.innerHTML = '<span class="loader"></span> 진행중';
+
+            ws.send(JSON.stringify({
+                type: "approval_response",
+                payload: {
+                    approve: approve,
+                    session_id: currentSessionId
+                }
+            }));
+        }
+
+        function sendMessage() {
+            const text = messageInput.value.trim();
+            if (!text && selectedImages.length === 0) return;
+
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                appendMessage("서버와 연결되어 있지 않습니다.", "agent");
+                return;
+            }
+
+            // UI 업데이트
+            appendMessage(text || "이미지 전송", "user", selectedImages);
+            messageInput.value = '';
+            const currentImages = [...selectedImages];
+            selectedImages = [];
+            renderPreviews();
+
+            sendBtn.disabled = true;
+            sendBtn.innerHTML = '<span class="loader"></span> 전송중';
+
+            const msgId = crypto.randomUUID();
+            window.sentMessageIds = window.sentMessageIds || new Set();
+            window.sentMessageIds.add(msgId);
+
+            ws.send(JSON.stringify({
+                type: "chat",
+                payload: {
+                    message_id: msgId,
+                    message: text || "이미지를 분석해줘.",
+                    images: currentImages,
+                    session_id: currentSessionId
+                }
+            }));
+        }
+    </script>
+</body>
+
+</html>
