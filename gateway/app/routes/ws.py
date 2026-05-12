@@ -80,6 +80,48 @@ async def websocket_endpoint(
             if msg_type == "chat":
                 # User (App or Agent UI) sends a chat
                 content = payload.get("message", "")
+                images = payload.get("images", [])
+                processed_images = []
+                
+                # Base64 이미지 처리
+                import base64
+                import os
+                from app.core.config import settings
+                import jwt
+                import time
+
+                for img_data in images:
+                    if img_data.startswith("data:image"):
+                        try:
+                            header, encoded = img_data.split(",", 1)
+                            ext = "." + header.split("/")[1].split(";")[0]
+                            image_uuid = str(uuid.uuid4())
+                            
+                            session_dir = os.path.join(settings.UPLOAD_DIR, user_id, session_id)
+                            os.makedirs(session_dir, exist_ok=True)
+                            
+                            file_path = os.path.join(session_dir, f"{image_uuid}{ext}")
+                            with open(file_path, "wb") as f:
+                                f.write(base64.b64decode(encoded))
+                            
+                            # Signed URL 생성 (WebSocket에서는 Request 객체가 없으므로 설정 기반 URL 사용 권장하나 우선 상대경로/더미 도메인으로 구성)
+                            # 실제 환경에서는 settings.BASE_URL 등을 사용해야 함.
+                            expire = time.time() + (settings.TOKEN_EXPIRE_HOURS * 3600)
+                            token_payload = {"user_id": user_id, "session_id": session_id, "image_uuid": image_uuid, "exp": expire}
+                            token = jwt.encode(token_payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+                            
+                            # 포트 80이 호스트에 매핑되어 있으므로 localhost:80 (또는 실제 도메인) 사용
+                            image_url = f"http://localhost/view/{user_id}/{session_id}/{image_uuid}?token={token}"
+                            processed_images.append(image_url)
+                        except Exception as e:
+                            logger.error(f"Image processing failed: {e}")
+                            processed_images.append(img_data) # 실패 시 원본 유지
+                    else:
+                        processed_images.append(img_data)
+                
+                # 페이로드 업데이트
+                payload["images"] = processed_images
+                data["payload"] = payload
                 
                 new_msg = Message(
                     message_id=uuid.UUID(message_id) if message_id else uuid.uuid4(),
@@ -91,8 +133,9 @@ async def websocket_endpoint(
                 db.add(new_msg)
                 await db.commit()
                 
-                # Forward to target
-                await manager.send_to_role(user_id, target_role, data)
+                # 모든 역할(Agent, App)에게 브로드캐스트 (에이전트가 수신하여 실행하기 위함)
+                await manager.send_to_role(user_id, "agent", data)
+                await manager.send_to_role(user_id, "app", data)
 
             elif msg_type == "log":
                 status = payload.get("status")

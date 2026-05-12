@@ -7,6 +7,7 @@ from .core.connection import start_flush_worker, stop_flush_worker
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    print("DEBUG: Gateway lifespan starting...")
     # DB 스키마 생성 (로컬 테스트용)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
