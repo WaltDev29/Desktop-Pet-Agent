@@ -60,6 +60,9 @@ async def _get_or_create_agent():
         _agent = await create_agent()
     return _agent
 
+# 중복 실행 방지 메모리: 게이트웨이와 로컬 파이프라인 혼합 시 중복 방지
+executed_message_ids = set()
+
 # DB의 UUID 필드와 호환되도록 기본값으로 UUID 형식을 사용함
 DEFAULT_UUID = "00000000-0000-0000-0000-000000000000"
 
@@ -211,6 +214,11 @@ async def handle_gateway_chat(payload: ChatPayload):
     session_id = payload.session_id or str(uuid.uuid4())
     logger.info(f"[GatewayHandler] Received chat. session_id={session_id}")
     
+    # 중복 실행 방지 검사 (텍스트 전용 메시지의 경우 이미 로컬에서 실행됨)
+    if payload.message_id in executed_message_ids:
+        logger.info(f"[GatewayHandler] Already executed locally, skipping: {payload.message_id}")
+        return
+        
     # 게이트웨이(앱)에서 온 채팅 메시지를 로컬 UI에도 표시 (동기화)
     # 이미 URL로 변환된 상태이므로 UI에서도 이를 표시할 수 있음
     await local_manager.broadcast(WsMessage(type="chat", payload=payload))
@@ -257,9 +265,27 @@ async def websocket_endpoint(websocket: WebSocket):
                     chat_payload = ChatPayload.model_validate(raw_data.get("payload", {}))
                     session_id = chat_payload.session_id or str(uuid.uuid4())
                     
+                    # msg 객체에 새로 생성된 message_id를 포함한 payload로 교체하여 일관성 유지
+                    msg.payload = chat_payload
+                    
                     if not gateway_client.is_local_mode:
-                        # [온라인 모드] 게이트웨이로 보내서 이미지 저장 및 URL 변환 요청
-                        await gateway_client.send_message(msg)
+                        if not chat_payload.images:
+                            # [온라인 모드 - 텍스트 전용] 
+                            # 지연 시간 최소화를 위해 로컬 즉시 실행 + 게이트웨이로 전송(DB/동기화 용도)
+                            executed_message_ids.add(chat_payload.message_id)
+                            await gateway_client.send_message(msg)
+                            
+                            agent = await _get_or_create_agent()
+                            config = _make_config(session_id)
+                            current_state = agent.get_state(config)
+                            existing_images = current_state.values.get("uploaded_images", []) if current_state.values else []
+                            
+                            state = await _initial_state(chat_payload, session_id, existing_images)
+                            await execute_agent(session_id, state=state)
+                        else:
+                            # [온라인 모드 - 이미지 포함] 
+                            # 이미지 URL 변환을 위해 게이트웨이로 보내고, URL이 포함된 메시지가 콜백으로 반환될 때까지 대기
+                            await gateway_client.send_message(msg)
                     else:
                         # [로컬 모드] 이미지 첨부 여부 확인
                         if chat_payload.images:

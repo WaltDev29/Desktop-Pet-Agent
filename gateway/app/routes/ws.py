@@ -121,10 +121,13 @@ async def websocket_endpoint(
                 
                 # 페이로드 업데이트
                 payload["images"] = processed_images
+                # message_id가 누락되었을 경우를 대비하여 DB에 저장되는 ID를 명시적으로 주입 (App과 Agent의 동기화 보장)
+                generated_id = uuid.UUID(message_id) if message_id else uuid.uuid4()
+                payload["message_id"] = str(generated_id)
                 data["payload"] = payload
                 
                 new_msg = Message(
-                    message_id=uuid.UUID(message_id) if message_id else uuid.uuid4(),
+                    message_id=generated_id,
                     session_id=uuid.UUID(session_id),
                     role="user",
                     status="done",
