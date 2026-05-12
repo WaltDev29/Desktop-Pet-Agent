@@ -15,7 +15,8 @@ class BasePayload(BaseModel):
 
 MessageType = Literal[
     "register", "status", "token", "log", "approval_request", 
-    "approval_response", "done", "chat", "ping", "pong", "error"
+    "approval_response", "done", "chat", "ping", "pong", "error",
+    "session_sync", "session_created", "session_deleted"
 ]
 
 class WsMessage(BaseModel):
@@ -57,6 +58,22 @@ class ApprovalRequestPayload(BasePayload):
 
 class ApprovalResponsePayload(BasePayload):
     approve: bool = Field(..., description="승인 여부 (true/false)")
+
+class SessionItem(BaseModel):
+    session_id: str
+    title: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+class SessionSyncPayload(BasePayload):
+    sessions: List[SessionItem] = Field(..., description="유저의 전체 세션 목록")
+
+class SessionCreatedPayload(BasePayload):
+    session_id: str = Field(..., description="새로 생성된 세션 ID")
+    title: Optional[str] = Field(None, description="세션 제목")
+
+class SessionDeletedPayload(BasePayload):
+    session_id: str = Field(..., description="삭제된 세션 ID")
 
 class DonePayload(BasePayload):
     final_message: str = Field(..., description="최종 완료 메시지")

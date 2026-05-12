@@ -109,6 +109,10 @@ class GatewayClient:
                         payload = ApprovalResponsePayload.model_validate(raw_payload)
                         asyncio.create_task(self.approve_handler(payload))
                         
+                    elif msg_type in ("session_sync", "session_created", "session_deleted") and getattr(self, "sync_handler", None):
+                        # Pydantic을 거치지 않고 raw data 통과 (단순 포워딩)
+                        asyncio.create_task(self.sync_handler(msg_type, raw_payload))
+                        
                     elif msg_type == "ping":
                         pong_msg = WsMessage(type="pong", payload=PingPongPayload())
                         await self.ws.send(pong_msg.model_dump_json())

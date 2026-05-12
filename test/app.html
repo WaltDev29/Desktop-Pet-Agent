@@ -595,6 +595,11 @@
                 return;
             }
 
+            // session_id가 없으면 게이트웨이가 메시지를 무시하므로, 발송 전 세션 생성
+            if (!currentSessionId) {
+                createNewSession();
+            }
+
             // UI 업데이트
             appendMessage(text || "이미지 전송", "user", selectedImages);
             messageInput.value = '';
