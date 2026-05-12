@@ -443,6 +443,11 @@
                 }
                 // 5. 채팅 메시지 동기화 (chat) - 외부(앱)에서 온 메시지 표시
                 else if (type === "chat") {
+                    const msgId = data.message_id;
+                    if (window.sentMessageIds && window.sentMessageIds.has(msgId)) {
+                        // 내가 전송했던 메시지가 돌아온 것이므로 화면에 중복 출력하지 않음
+                        return;
+                    }
                     appendMessage(data.message, "user", data.images || []);
                 }
                 // 6. 승인 결과 동기화 (approval_response) - 외부(앱)에서 처리한 결과 표시
@@ -596,9 +601,14 @@
             sendBtn.disabled = true;
             sendBtn.innerHTML = '<span class="loader"></span> 전송중';
 
+            const msgId = crypto.randomUUID();
+            window.sentMessageIds = window.sentMessageIds || new Set();
+            window.sentMessageIds.add(msgId);
+
             ws.send(JSON.stringify({
                 type: "chat",
                 payload: {
+                    message_id: msgId,
                     message: text || "이미지를 분석해줘.",
                     images: currentImages,
                     session_id: currentSessionId
