@@ -61,10 +61,14 @@ async def websocket_endpoint(
             session_id = payload.get("session_id")
             message_id = payload.get("message_id")
             
-            if not session_id or session_id == "system":
-                # Handle system messages (ping/pong)
-                if msg_type == "ping":
-                    await websocket.send_json({"type": "pong", "payload": {"session_id": "system"}})
+            # 시스템 메시지(Ping) 처리 - session_id 불필요
+            if msg_type == "ping":
+                await websocket.send_json({"type": "pong", "payload": {}})
+                continue
+
+            # 대화 관련 메시지인데 session_id나 message_id가 없는 경우 무시
+            if not session_id or not message_id:
+                logger.warning(f"Missing identifiers: session_id={session_id}, message_id={message_id}")
                 continue
 
             # Ensure session exists in DB

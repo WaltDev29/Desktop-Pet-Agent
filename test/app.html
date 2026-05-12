@@ -571,6 +571,9 @@
 
         function handleApprove(approve) {
             if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            if (!currentSessionId) {
+                createNewSession();
+            }
 
             appendMessage(approve ? "✅ 승인합니다." : "❌ 거절합니다.", "user");
 

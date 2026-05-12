@@ -567,6 +567,9 @@
 
         function handleApprove(approve) {
             if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            if (!currentSessionId) {
+                createNewSession();
+            }
 
             appendMessage(approve ? "✅ 승인합니다." : "❌ 거절합니다.", "user");
 
@@ -585,6 +588,11 @@
         function sendMessage() {
             const text = messageInput.value.trim();
             if (!text && selectedImages.length === 0) return;
+
+            // session_id 필수 체크 및 자동 생성
+            if (!currentSessionId) {
+                createNewSession();
+            }
 
             if (!ws || ws.readyState !== WebSocket.OPEN) {
                 appendMessage("서버와 연결되어 있지 않습니다.", "agent");

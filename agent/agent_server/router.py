@@ -211,7 +211,7 @@ async def execute_agent(session_id: str, state=None, command=None):
 # Gateway로부터의 핸들러 (App -> Gateway -> Agent)
 # ==========================================
 async def handle_gateway_chat(payload: ChatPayload):
-    session_id = payload.session_id or str(uuid.uuid4())
+    session_id = payload.session_id
     logger.info(f"[GatewayHandler] Received chat. session_id={session_id}")
     
     # 중복 실행 방지 검사 (텍스트 전용 메시지의 경우 이미 로컬에서 실행됨)
@@ -232,7 +232,7 @@ async def handle_gateway_chat(payload: ChatPayload):
     await execute_agent(session_id, state=state)
 
 async def handle_gateway_approve(payload: ApprovalResponsePayload):
-    session_id = payload.session_id or DEFAULT_UUID
+    session_id = payload.session_id
     logger.info(f"[GatewayHandler] Received approve={payload.approve} for session={session_id}")
     
     # 게이트웨이(앱)에서 온 승인 여부를 로컬 UI에도 표시 (동기화)
@@ -263,7 +263,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 if msg.type == "chat":
                     raw_data = json.loads(raw_msg)
                     chat_payload = ChatPayload.model_validate(raw_data.get("payload", {}))
-                    session_id = chat_payload.session_id or str(uuid.uuid4())
+                    session_id = chat_payload.session_id
                     
                     # msg 객체에 새로 생성된 message_id를 포함한 payload로 교체하여 일관성 유지
                     msg.payload = chat_payload
@@ -309,7 +309,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 elif msg.type == "approval_response":
                     raw_data = json.loads(raw_msg)
                     app_payload = ApprovalResponsePayload.model_validate(raw_data.get("payload", {}))
-                    session_id = app_payload.session_id or DEFAULT_UUID
+                    session_id = app_payload.session_id
                     
                     if not gateway_client.is_local_mode:
                         # [온라인 모드] 게이트웨이로 전달
