@@ -326,6 +326,13 @@ async def websocket_endpoint(websocket: WebSocket):
                         # [로컬 모드] 직접 처리
                         await execute_agent(session_id, command=Command(resume=app_payload.approve))
                 
+                elif msg.type in ["session_created", "session_deleted"]:
+                    if not gateway_client.is_local_mode:
+                        logger.info(f"[WebSocket] Forwarding {msg.type} to Gateway: {msg.payload}")
+                        await gateway_client.send_message(msg)
+                    else:
+                        logger.warning(f"[WebSocket] Cannot forward {msg.type}: Local mode active")
+                
                 elif msg.type == "register":
                     # 데스크탑 UI가 세션 정보를 보내며 등록하는 경우 (필요 시 처리)
                     pass

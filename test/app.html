@@ -319,15 +319,21 @@
 
         function deleteCurrentSession() {
             if (!currentSessionId) return;
+            if (!confirm('현재 세션을 삭제하시겠습니까?')) return;
+
+            const sidToDelete = currentSessionId;
+
+            // 1. 낙관적 UI 업데이트
+            sessionList = sessionList.filter(s => s !== sidToDelete);
+            localStorage.setItem('app_sessions_list', JSON.stringify(sessionList));
+            updateAfterDeletion();
+
+            // 2. 서버에 삭제 요청 전송
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                     type: "session_deleted",
-                    payload: { session_id: currentSessionId }
+                    payload: { session_id: sidToDelete }
                 }));
-            } else {
-                sessionList = sessionList.filter(s => s !== currentSessionId);
-                localStorage.setItem('app_sessions_list', JSON.stringify(sessionList));
-                updateAfterDeletion();
             }
         }
 
