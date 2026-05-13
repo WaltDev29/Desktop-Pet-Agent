@@ -222,24 +222,39 @@ async def execute_agent(session_id: str, state=None, command=None):
 # ==========================================
 async def handle_gateway_chat(payload: ChatPayload):
     session_id = payload.session_id
-    logger.info(f"[GatewayHandler] Received chat. session_id={session_id}")
     
     # 중복 실행 방지 검사 (텍스트 전용 메시지의 경우 이미 로컬에서 실행됨)
     if payload.message_id in executed_message_ids:
         logger.info(f"[GatewayHandler] Already executed locally, skipping: {payload.message_id}")
         return
-        
+
     # 게이트웨이(앱)에서 온 채팅 메시지를 로컬 UI에도 표시 (동기화)
-    # 이미 URL로 변환된 상태이므로 UI에서도 이를 표시할 수 있음
     await local_manager.broadcast(WsMessage(type="chat", payload=payload))
-    
-    agent = await _get_or_create_agent()
-    config = _make_config(session_id)
-    current_state = agent.get_state(config)
-    existing_images = current_state.values.get("uploaded_images", []) if current_state.values else []
-    
-    state = await _initial_state(payload, session_id, existing_images)
-    await execute_agent(session_id, state=state)
+
+    async def process_locked_chat():
+        lock = get_session_lock(session_id)
+        async with lock:
+            # 상태 동기화: 시작
+            status_msg = WsMessage(type="status", payload={"status": "busy", "session_id": session_id})
+            await local_manager.broadcast(status_msg)
+            await gateway_client.send_message(status_msg)
+
+            try:
+                logger.info(f"[GatewayHandler] Received chat. session_id={session_id}")
+                agent = await _get_or_create_agent()
+                config = _make_config(session_id)
+                current_state = agent.get_state(config)
+                existing_images = current_state.values.get("uploaded_images", []) if current_state.values else []
+                
+                state = await _initial_state(payload, session_id, existing_images)
+                await execute_agent(session_id, state=state)
+            finally:
+                # 상태 동기화: 종료
+                ready_msg = WsMessage(type="status", payload={"status": "ready", "session_id": session_id})
+                await local_manager.broadcast(ready_msg)
+                await gateway_client.send_message(ready_msg)
+
+    asyncio.create_task(process_locked_chat())
 
 async def handle_gateway_approve(payload: ApprovalResponsePayload):
     session_id = payload.session_id
@@ -289,7 +304,10 @@ async def websocket_endpoint(websocket: WebSocket):
                         lock = get_session_lock(sid)
                         async with lock:
                             # 실행 시작 알림 (모든 기기 버튼 비활성화용)
-                            await local_manager.broadcast(WsMessage(type="status", payload={"status": "busy", "session_id": sid}))
+                            status_msg = WsMessage(type="status", payload={"status": "busy", "session_id": sid})
+                            await local_manager.broadcast(status_msg)
+                            if not gateway_client.is_local_mode:
+                                await gateway_client.send_message(status_msg)
                             
                             try:
                                 if not gateway_client.is_local_mode:
@@ -316,7 +334,10 @@ async def websocket_endpoint(websocket: WebSocket):
                                         await execute_agent(sid, state=state)
                             finally:
                                 # 실행 종료 알림 (모든 기기 버튼 활성화용)
-                                await local_manager.broadcast(WsMessage(type="status", payload={"status": "ready", "session_id": sid}))
+                                ready_msg = WsMessage(type="status", payload={"status": "ready", "session_id": sid})
+                                await local_manager.broadcast(ready_msg)
+                                if not gateway_client.is_local_mode:
+                                    await gateway_client.send_message(ready_msg)
 
                     # 백그라운드 태스크로 실행하여 다른 메시지(세션 삭제 등) 처리를 방해하지 않음
                     asyncio.create_task(process_chat_sequentially(session_id, msg, chat_payload))

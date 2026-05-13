@@ -127,6 +127,11 @@ async def websocket_endpoint(
                 })
                 continue
 
+            elif msg_type == "status":
+                # 에이전트 상태(Busy/Ready)를 다른 기기들에도 전파
+                await manager.broadcast_to_user(user_id, data)
+                continue
+
             # 대화 관련 메시지인데 session_id나 message_id가 없는 경우 무시
             if not session_id or not message_id:
                 logger.warning(f"Missing identifiers: session_id={session_id}, message_id={message_id}")

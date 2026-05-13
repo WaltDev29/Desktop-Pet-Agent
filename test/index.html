@@ -532,6 +532,12 @@
                             }
                         }
                     }
+                    // 11. 에이전트 상태 동기화 (Busy/Ready)
+                    else if (type === "status") {
+                        if (data.session_id === currentSessionId) {
+                            setAgentBusy(data.status === "busy");
+                        }
+                    }
                 } catch (err) {
                     console.error("[WS Message Error]", err, event.data);
                 }
@@ -644,6 +650,18 @@
             msgDiv.appendChild(rejectBtn);
             chatBox.appendChild(msgDiv);
             chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        function setAgentBusy(isBusy) {
+            sendBtn.disabled = isBusy;
+            messageInput.disabled = isBusy;
+            if (isBusy) {
+                sendBtn.innerHTML = '<span class="loader"></span> 진행중';
+                sendBtn.style.opacity = "0.7";
+            } else {
+                sendBtn.innerHTML = '전송';
+                sendBtn.style.opacity = "1";
+            }
         }
 
         function handleApprove(approve) {
