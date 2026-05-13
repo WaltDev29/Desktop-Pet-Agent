@@ -36,6 +36,11 @@ class ConnectionManager:
             except Exception as e:
                 logger.error(f"Error sending to {client_id}: {e}")
                 self.disconnect(user_id, role, client_id)
+
+    async def broadcast_to_user(self, user_id: str, message: dict):
+        """Send message to both agent and app roles for a specific user."""
+        for role in ["agent", "app"]:
+            await self.send_to_role(user_id, role, message)
                 
     async def buffer_token(self, message_id: str, chunk: str):
         self.token_buffers[message_id] += chunk

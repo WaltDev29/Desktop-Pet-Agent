@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from app.db.database import get_db
 from app.db.models import Session, Message, MessageLog
 from app.core.connection import manager
@@ -50,6 +50,17 @@ async def websocket_endpoint(
             manager.active_connections[user_id][role][client_id] = websocket
             logger.info(f"Registered: user_id={user_id}, role={role}, client_id={client_id}")
             
+            # Send initial session list for synchronization
+            stmt = select(Session).where(Session.user_id == uuid.UUID(user_id)).order_by(Session.created_at.desc())
+            result = await db.execute(stmt)
+            sessions = result.scalars().all()
+            session_ids = [str(s.session_id) for s in sessions]
+            
+            await websocket.send_json({
+                "type": "session_sync",
+                "payload": {"sessions": session_ids}
+            })
+            
         else:
             await websocket.close(code=1008)
             return
@@ -64,6 +75,28 @@ async def websocket_endpoint(
             # 시스템 메시지(Ping) 처리 - session_id 불필요
             if msg_type == "ping":
                 await websocket.send_json({"type": "pong", "payload": {}})
+                continue
+
+            # 세션 관리 메시지 처리 (message_id 불필요)
+            if msg_type == "session_created":
+                new_session = Session(session_id=uuid.UUID(session_id), user_id=uuid.UUID(user_id))
+                db.add(new_session)
+                await db.commit()
+                await manager.broadcast_to_user(user_id, {
+                    "type": "session_created",
+                    "payload": {"session_id": session_id}
+                })
+                continue
+
+            elif msg_type == "session_deleted":
+                await db.execute(delete(Message).where(Message.session_id == uuid.UUID(session_id)))
+                stmt = delete(Session).where(Session.session_id == uuid.UUID(session_id))
+                await db.execute(stmt)
+                await db.commit()
+                await manager.broadcast_to_user(user_id, {
+                    "type": "session_deleted",
+                    "payload": {"session_id": session_id}
+                })
                 continue
 
             # 대화 관련 메시지인데 session_id나 message_id가 없는 경우 무시

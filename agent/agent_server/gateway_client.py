@@ -50,9 +50,10 @@ class GatewayClient:
         self.chat_handler = None
         self.approve_handler = None
 
-    def set_handlers(self, chat_handler, approve_handler):
+    def set_handlers(self, chat_handler, approve_handler, sync_handler=None):
         self.chat_handler = chat_handler
         self.approve_handler = approve_handler
+        self.sync_handler = sync_handler
 
     async def connect(self):
         """정확히 3회 연결을 시도하고 실패 시 로컬 모드로 전환합니다."""

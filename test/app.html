@@ -305,14 +305,33 @@
             currentSessionId = crypto.randomUUID();
             localStorage.setItem('app_session_id', currentSessionId);
             chatBox.innerHTML = '<div class="message agent">새로운 대화 세션이 시작되었습니다.</div>';
-            updateSessionStorage();
+            
+            // 서버에 세션 생성 알림 (동기화 용도)
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: "session_created",
+                    payload: { session_id: currentSessionId }
+                }));
+            } else {
+                updateSessionStorage();
+            }
         }
 
         function deleteCurrentSession() {
             if (!currentSessionId) return;
-            sessionList = sessionList.filter(s => s !== currentSessionId);
-            localStorage.setItem('app_sessions_list', JSON.stringify(sessionList));
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: "session_deleted",
+                    payload: { session_id: currentSessionId }
+                }));
+            } else {
+                sessionList = sessionList.filter(s => s !== currentSessionId);
+                localStorage.setItem('app_sessions_list', JSON.stringify(sessionList));
+                updateAfterDeletion();
+            }
+        }
 
+        function updateAfterDeletion() {
             chatBox.innerHTML = '<div class="message agent">진행 중이던 세션이 완전히 폐기되었습니다. 우측 상단에서 새 대화를 시작해주세요.</div>';
             currentSessionId = sessionList.length > 0 ? sessionList[sessionList.length - 1] : null;
             if (currentSessionId) localStorage.setItem('app_session_id', currentSessionId);
@@ -327,7 +346,6 @@
 
             ws.onopen = () => {
                 appendMessage("게이트웨이 서버와 연결되었습니다. 🟢", "agent");
-                // 모바일 앱 역할로 등록 (client_id 필수)
                 ws.send(JSON.stringify({
                     type: "register",
                     payload: {
@@ -338,70 +356,91 @@
             };
 
             ws.onmessage = (event) => {
-                const msg = JSON.parse(event.data);
-                const type = msg.type;
-                const data = msg.payload; // Payload 객체
+                try {
+                    const msg = JSON.parse(event.data);
+                    const type = msg.type;
+                    const data = msg.payload;
 
-                // 1. 승인 요청 (approval_request)
-                if (type === "approval_request") {
-                    currentMessageDiv = null;
-                    thoughtLogDiv = null;
-                    finalResponseDiv = null;
-                    appendMessage(`⚠️ 승인 필요: ${data.message}`, "agent");
-                    renderApprovalButtons();
-                }
-                // 2. 로그 (log)
-                else if (type === "log") {
-                    const status = data.status;
+                    console.log(`[WS Receive] type: ${type}`, data);
 
-                    if (status === "error") {
+                    if (!data) return;
+
+                    // 1. 승인 요청 (approval_request)
+                    if (type === "approval_request") {
                         currentMessageDiv = null;
                         thoughtLogDiv = null;
                         finalResponseDiv = null;
-                        appendMessage(`❌ 에러: ${data.message}`, "agent");
-                        resetSendButton();
-                    } else if (status === "info") {
-                        appendMessage(`ℹ️ 안내: ${data.message}`, "agent");
-                    } else if (status === "node_start") {
-                        const nodeName = data.node;
+                        appendMessage(`⚠️ 승인 필요: ${data.message || ""}`, "agent");
+                        renderApprovalButtons();
+                    }
+                    // 2. 로그 (log)
+                    else if (type === "log") {
+                        if (!data.status) return;
+                        const status = data.status;
 
-                        if (!currentMessageDiv) {
-                            currentMessageDiv = appendMessage("", "agent");
-                            currentMessageDiv.innerText = ""; // 초기화
-                            thoughtLogDiv = document.createElement("div");
-                            thoughtLogDiv.className = "thought-log";
-                            currentMessageDiv.appendChild(thoughtLogDiv);
-                        }
-
-                        if (nodeName === "aggregator") {
-                            if (thoughtLogDiv && !thoughtLogDiv.classList.contains("finalized")) {
-                                const details = document.createElement("details");
-                                details.className = "thought-toggle";
-                                const summary = document.createElement("summary");
-                                summary.innerText = "사고 과정 보기";
-                                const contentDiv = document.createElement("div");
-                                contentDiv.className = "thought-content";
-                                contentDiv.innerText = thoughtLogDiv.innerText;
-
-                                details.appendChild(summary);
-                                details.appendChild(contentDiv);
-
-                                currentMessageDiv.replaceChild(details, thoughtLogDiv);
-                                thoughtLogDiv = null;
+                        if (status === "error") {
+                            currentMessageDiv = null;
+                            thoughtLogDiv = null;
+                            finalResponseDiv = null;
+                            appendMessage(`❌ 에러: ${data.message || "알 수 없는 오류"}`, "agent");
+                            resetSendButton();
+                        } else if (status === "info") {
+                            appendMessage(`ℹ️ 안내: ${data.message || ""}`, "agent");
+                        } else if (status === "node_start") {
+                            const nodeName = data.node;
+                            if (!currentMessageDiv) {
+                                currentMessageDiv = appendMessage("", "agent");
+                                currentMessageDiv.innerText = "";
+                                thoughtLogDiv = document.createElement("div");
+                                thoughtLogDiv.className = "thought-log";
+                                currentMessageDiv.appendChild(thoughtLogDiv);
                             }
 
-                            finalResponseDiv = document.createElement("div");
-                            finalResponseDiv.className = "final-response";
-                            currentMessageDiv.appendChild(finalResponseDiv);
-                            chatBox.scrollTop = chatBox.scrollHeight;
-                        } else {
+                            if (nodeName === "aggregator") {
+                                if (thoughtLogDiv && !thoughtLogDiv.classList.contains("finalized")) {
+                                    const details = document.createElement("details");
+                                    details.className = "thought-toggle";
+                                    const summary = document.createElement("summary");
+                                    summary.innerText = "사고 과정 보기";
+                                    const contentDiv = document.createElement("div");
+                                    contentDiv.className = "thought-content";
+                                    contentDiv.innerText = thoughtLogDiv.innerText;
+
+                                    details.appendChild(summary);
+                                    details.appendChild(contentDiv);
+                                    currentMessageDiv.replaceChild(details, thoughtLogDiv);
+                                    thoughtLogDiv = null;
+                                }
+
+                                finalResponseDiv = document.createElement("div");
+                                finalResponseDiv.className = "final-response";
+                                currentMessageDiv.appendChild(finalResponseDiv);
+                                chatBox.scrollTop = chatBox.scrollHeight;
+                            } else {
+                                if (thoughtLogDiv) {
+                                    thoughtLogDiv.innerText += `\n[⚙️ ${nodeName} 동작 중...]\n`;
+                                    thoughtLogDiv.scrollTop = thoughtLogDiv.scrollHeight;
+                                }
+                                chatBox.scrollTop = chatBox.scrollHeight;
+                            }
+                        } else if (status === "tool_start") {
+                            if (!currentMessageDiv) {
+                                currentMessageDiv = appendMessage("", "agent");
+                                currentMessageDiv.innerText = "";
+                                thoughtLogDiv = document.createElement("div");
+                                thoughtLogDiv.className = "thought-log";
+                                currentMessageDiv.appendChild(thoughtLogDiv);
+                            }
+                            const toolInputStr = typeof data.tool_input === 'object' ? JSON.stringify(data.tool_input) : data.tool_input;
                             if (thoughtLogDiv) {
-                                thoughtLogDiv.innerText += `\n[⚙️ ${nodeName} 동작 중...]\n`;
+                                thoughtLogDiv.innerText += `\n[🛠️ 도구 호출: ${data.tool_name}] 파라미터: ${toolInputStr}\n`;
                                 thoughtLogDiv.scrollTop = thoughtLogDiv.scrollHeight;
                             }
                             chatBox.scrollTop = chatBox.scrollHeight;
                         }
-                    } else if (status === "tool_start") {
+                    }
+                    // 3. 토큰 (token)
+                    else if (type === "token") {
                         if (!currentMessageDiv) {
                             currentMessageDiv = appendMessage("", "agent");
                             currentMessageDiv.innerText = "";
@@ -409,54 +448,67 @@
                             thoughtLogDiv.className = "thought-log";
                             currentMessageDiv.appendChild(thoughtLogDiv);
                         }
-                        const toolInputStr = typeof data.tool_input === 'object' ? JSON.stringify(data.tool_input) : data.tool_input;
-                        if (thoughtLogDiv) {
-                            thoughtLogDiv.innerText += `\n[🛠️ 도구 호출: ${data.tool_name}] 파라미터: ${toolInputStr}\n`;
+
+                        if (finalResponseDiv) {
+                            finalResponseDiv.innerText += data.chunk;
+                        } else if (thoughtLogDiv) {
+                            thoughtLogDiv.innerText += data.chunk;
                             thoughtLogDiv.scrollTop = thoughtLogDiv.scrollHeight;
                         }
                         chatBox.scrollTop = chatBox.scrollHeight;
                     }
-                }
-                // 3. 토큰 (token)
-                else if (type === "token") {
-                    if (!currentMessageDiv) {
-                        currentMessageDiv = appendMessage("", "agent");
-                        currentMessageDiv.innerText = "";
-                        thoughtLogDiv = document.createElement("div");
-                        thoughtLogDiv.className = "thought-log";
-                        currentMessageDiv.appendChild(thoughtLogDiv);
+                    // 4. 완료 (done)
+                    else if (type === "done") {
+                        currentMessageDiv = null;
+                        thoughtLogDiv = null;
+                        finalResponseDiv = null;
+                        resetSendButton();
+                        if (data.final_message) {
+                            appendMessage(data.final_message, "agent");
+                        }
                     }
-
-                    if (finalResponseDiv) {
-                        finalResponseDiv.innerText += data.chunk;
-                    } else if (thoughtLogDiv) {
-                        thoughtLogDiv.innerText += data.chunk;
-                        thoughtLogDiv.scrollTop = thoughtLogDiv.scrollHeight;
+                    // 5. 채팅 메시지 동기화
+                    else if (type === "chat") {
+                        const msgId = data.message_id;
+                        if (window.sentMessageIds && window.sentMessageIds.has(msgId)) return;
+                        appendMessage(data.message, "user", data.images || []);
                     }
-                    chatBox.scrollTop = chatBox.scrollHeight;
-                }
-                // 4. 완료 (done)
-                else if (type === "done") {
-                    currentMessageDiv = null;
-                    thoughtLogDiv = null;
-                    finalResponseDiv = null;
-                    resetSendButton();
-                    if (data.final_message) {
-                        appendMessage(data.final_message, "agent");
+                    // 6. 승인 결과 동기화
+                    else if (type === "approval_response") {
+                        appendMessage(data.approve ? "✅ 승인합니다. (앱에서 승인됨)" : "❌ 거절합니다. (앱에서 거절됨)", "user");
                     }
-                }
-                // 5. 채팅 메시지 동기화 (chat) - 외부(앱)에서 온 메시지 표시
-                else if (type === "chat") {
-                    const msgId = data.message_id;
-                    if (window.sentMessageIds && window.sentMessageIds.has(msgId)) {
-                        // 내가 전송했던 메시지가 돌아온 것이므로 화면에 중복 출력하지 않음
-                        return;
+                    // 7. 세션 초기 동기화
+                    else if (type === "session_sync") {
+                        sessionList = data.sessions;
+                        localStorage.setItem('app_sessions_list', JSON.stringify(sessionList));
+                        if (currentSessionId && !sessionList.includes(currentSessionId)) {
+                            currentSessionId = sessionList.length > 0 ? sessionList[0] : null;
+                            if (currentSessionId) localStorage.setItem('app_session_id', currentSessionId);
+                        }
+                        renderSessionList();
                     }
-                    appendMessage(data.message, "user", data.images || []);
-                }
-                // 6. 승인 결과 동기화 (approval_response) - 외부(앱)에서 처리한 결과 표시
-                else if (type === "approval_response") {
-                    appendMessage(data.approve ? "✅ 승인합니다. (앱에서 승인됨)" : "❌ 거절합니다. (앱에서 거절됨)", "user");
+                    // 8. 세션 생성 동기화
+                    else if (type === "session_created") {
+                        const sid = data.session_id;
+                        if (!sessionList.includes(sid)) {
+                            sessionList.unshift(sid);
+                            localStorage.setItem('app_sessions_list', JSON.stringify(sessionList));
+                            renderSessionList();
+                        }
+                    }
+                    // 9. 세션 삭제 동기화
+                    else if (type === "session_deleted") {
+                        const sid = data.session_id;
+                        sessionList = sessionList.filter(s => s !== sid);
+                        localStorage.setItem('app_sessions_list', JSON.stringify(sessionList));
+                        if (currentSessionId === sid) {
+                            updateAfterDeletion();
+                        } else {
+                            renderSessionList();
+                        }
+                    }
+                } catch (err) {
+                    console.error("[WS Message Error]", err, event.data);
                 }
             };
 
