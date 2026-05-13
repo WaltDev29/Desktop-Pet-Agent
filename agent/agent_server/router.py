@@ -326,7 +326,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         # [로컬 모드] 직접 처리
                         await execute_agent(session_id, command=Command(resume=app_payload.approve))
                 
-                elif msg.type in ["session_created", "session_deleted"]:
+                elif msg.type in ["session_created", "session_deleted", "get_history"]:
                     if not gateway_client.is_local_mode:
                         logger.info(f"[WebSocket] Forwarding {msg.type} to Gateway: {msg.payload}")
                         await gateway_client.send_message(msg)

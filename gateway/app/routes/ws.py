@@ -105,6 +105,28 @@ async def websocket_endpoint(
                 })
                 continue
 
+            elif msg_type == "get_history":
+                # 특정 세션의 대화 이력 조회
+                stmt = select(Message).where(Message.session_id == uuid.UUID(session_id)).order_by(Message.created_at.asc())
+                result = await db.execute(stmt)
+                history = []
+                for m in result.scalars().all():
+                    history.append({
+                        "role": m.role,
+                        "message": m.content,
+                        "message_id": str(m.message_id),
+                        "created_at": m.created_at.isoformat()
+                    })
+                
+                await websocket.send_json({
+                    "type": "history_res",
+                    "payload": {
+                        "session_id": session_id,
+                        "history": history
+                    }
+                })
+                continue
+
             # 대화 관련 메시지인데 session_id나 message_id가 없는 경우 무시
             if not session_id or not message_id:
                 logger.warning(f"Missing identifiers: session_id={session_id}, message_id={message_id}")

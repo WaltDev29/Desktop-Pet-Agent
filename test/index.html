@@ -292,7 +292,15 @@
                 btn.onclick = () => {
                     currentSessionId = sid;
                     localStorage.setItem('agent_session_id', sid);
-                    chatBox.innerHTML = '<div class="message agent">기존 세션(' + sid.substring(0, 6) + ')으로 전환되었습니다.<br>(현재 UI MVP 특성상 지난 대화 로그는 불러오지 않지만 백엔드 메모리는 연결되었습니다)</div>';
+                    chatBox.innerHTML = '<div class="message agent">세션(' + sid.substring(0, 6) + ')의 대화를 불러오는 중...</div>';
+                    
+                    // 서버에 대화 이력 요청
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({
+                            type: "get_history",
+                            payload: { session_id: sid }
+                        }));
+                    }
                     renderSessionList();
                 };
                 listDiv.appendChild(btn);
@@ -509,6 +517,19 @@
                             updateAfterDeletion();
                         } else {
                             renderSessionList();
+                        }
+                    }
+                    // 10. 대화 이력 수신
+                    else if (type === "history_res") {
+                        if (data.session_id === currentSessionId) {
+                            chatBox.innerHTML = ''; // 초기화
+                            if (data.history && data.history.length > 0) {
+                                data.history.forEach(m => {
+                                    appendMessage(m.message, m.role);
+                                });
+                            } else {
+                                chatBox.innerHTML = '<div class="message agent">이전 대화가 없습니다.</div>';
+                            }
                         }
                     }
                 } catch (err) {

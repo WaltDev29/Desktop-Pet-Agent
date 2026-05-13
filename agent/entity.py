@@ -23,7 +23,8 @@ class SessionPayload(BasePayload):
 MessageType = Literal[
     "register", "status", "token", "log", "approval_request", 
     "approval_response", "done", "chat", "ping", "pong", "error",
-    "session_sync", "session_created", "session_deleted"
+    "session_sync", "session_created", "session_deleted",
+    "get_history", "history_res"
 ]
 
 class WsMessage(BaseModel):
