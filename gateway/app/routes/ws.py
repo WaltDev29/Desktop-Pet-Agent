@@ -89,10 +89,16 @@ async def websocket_endpoint(
                 continue
 
             elif msg_type == "session_deleted":
+                # Delete in order: MessageLogs -> Messages -> Session
+                # Using subquery for MessageLogs deletion
+                msg_ids_stmt = select(Message.message_id).where(Message.session_id == uuid.UUID(session_id))
+                await db.execute(delete(MessageLog).where(MessageLog.message_id.in_(msg_ids_stmt)))
                 await db.execute(delete(Message).where(Message.session_id == uuid.UUID(session_id)))
+                
                 stmt = delete(Session).where(Session.session_id == uuid.UUID(session_id))
                 await db.execute(stmt)
                 await db.commit()
+                
                 await manager.broadcast_to_user(user_id, {
                     "type": "session_deleted",
                     "payload": {"session_id": session_id}

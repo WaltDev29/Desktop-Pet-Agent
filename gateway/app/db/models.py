@@ -21,7 +21,7 @@ class Device(Base):
     __tablename__ = "devices"
 
     device_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
     device_name = Column(Text, nullable=False)
     device_type = Column(Text, default="pc")
     last_connected_at = Column(DateTime, nullable=True)
@@ -34,7 +34,7 @@ class Session(Base):
     __tablename__ = "sessions"
 
     session_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
     device_id = Column(UUID(as_uuid=True), ForeignKey("devices.device_id"), nullable=True)
     title = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -49,7 +49,7 @@ class Message(Base):
     __tablename__ = "messages"
 
     message_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    session_id = Column(UUID(as_uuid=True), ForeignKey("sessions.session_id"), nullable=False)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("sessions.session_id", ondelete="CASCADE"), nullable=False)
     role = Column(Text, nullable=False)  # user, agent, system
     status = Column(Text, nullable=False) # streaming, done, error
     content = Column(Text, nullable=False, default="")
@@ -64,7 +64,7 @@ class MessageLog(Base):
     __tablename__ = "message_logs"
 
     log_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    message_id = Column(UUID(as_uuid=True), ForeignKey("messages.message_id"), nullable=False)
+    message_id = Column(UUID(as_uuid=True), ForeignKey("messages.message_id", ondelete="CASCADE"), nullable=False)
     step = Column(Text, nullable=True)
     detail = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
