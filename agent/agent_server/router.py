@@ -6,6 +6,7 @@ FastAPI 라우터 - 로컬 데스크탑 UI와 통신하며 게이트웨이 서�
 import uuid
 import logging
 import json
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -60,6 +61,14 @@ async def _get_or_create_agent():
         from graph import create_agent
         _agent = await create_agent()
     return _agent
+
+# 세션별 실행 락 (순차 처리를 보장)
+session_locks = {}
+
+def get_session_lock(session_id: str) -> asyncio.Lock:
+    if session_id not in session_locks:
+        session_locks[session_id] = asyncio.Lock()
+    return session_locks[session_id]
 
 # 중복 실행 방지 메모리: 게이트웨이와 로컬 파이프라인 혼합 시 중복 방지
 executed_message_ids = set()
@@ -276,43 +285,41 @@ async def websocket_endpoint(websocket: WebSocket):
                     # msg 객체에 새로 생성된 message_id를 포함한 payload로 교체하여 일관성 유지
                     msg.payload = chat_payload
                     
-                    if not gateway_client.is_local_mode:
-                        if not chat_payload.images:
-                            # [온라인 모드 - 텍스트 전용] 
-                            # 지연 시간 최소화를 위해 로컬 즉시 실행 + 게이트웨이로 전송(DB/동기화 용도)
-                            executed_message_ids.add(chat_payload.message_id)
-                            await gateway_client.send_message(msg)
+                    async def process_chat_sequentially(sid, msg_obj, payload_obj):
+                        lock = get_session_lock(sid)
+                        async with lock:
+                            # 실행 시작 알림 (모든 기기 버튼 비활성화용)
+                            await local_manager.broadcast(WsMessage(type="status", payload={"status": "busy", "session_id": sid}))
                             
-                            agent = await _get_or_create_agent()
-                            config = _make_config(session_id)
-                            current_state = agent.get_state(config)
-                            existing_images = current_state.values.get("uploaded_images", []) if current_state.values else []
-                            
-                            state = await _initial_state(chat_payload, session_id, existing_images)
-                            await execute_agent(session_id, state=state)
-                        else:
-                            # [온라인 모드 - 이미지 포함] 
-                            # 이미지 URL 변환을 위해 게이트웨이로 보내고, URL이 포함된 메시지가 콜백으로 반환될 때까지 대기
-                            await gateway_client.send_message(msg)
-                    else:
-                        # [로컬 모드] 이미지 첨부 여부 확인
-                        if chat_payload.images:
-                            err_payload = LogPayload(
-                                status="error", 
-                                message="❌ 로컬 모드에서는 서버 연결이 없어 이미지를 처리할 수 없습니다.",
-                                session_id=session_id
-                            )
-                            await websocket.send_text(WsMessage(type="log", payload=err_payload).model_dump_json())
-                            continue # 실행 중단 및 다음 메시지 대기
+                            try:
+                                if not gateway_client.is_local_mode:
+                                    if not payload_obj.images:
+                                        executed_message_ids.add(payload_obj.message_id)
+                                        await gateway_client.send_message(msg_obj)
+                                        agent = await _get_or_create_agent()
+                                        config = _make_config(sid)
+                                        state = await _initial_state(payload_obj, sid, 
+                                                                   agent.get_state(config).values.get("uploaded_images", []) if agent.get_state(config).values else [])
+                                        await execute_agent(sid, state=state)
+                                    else:
+                                        await gateway_client.send_message(msg_obj)
+                                else:
+                                    # 로컬 모드 처리
+                                    if payload_obj.images:
+                                        err_msg = WsMessage(type="log", payload=LogPayload(status="error", message="❌ 로컬 모드 이미지 불가", session_id=sid))
+                                        await local_manager.broadcast(err_msg)
+                                    else:
+                                        agent = await _get_or_create_agent()
+                                        config = _make_config(sid)
+                                        state = await _initial_state(payload_obj, sid, 
+                                                                   agent.get_state(config).values.get("uploaded_images", []) if agent.get_state(config).values else [])
+                                        await execute_agent(sid, state=state)
+                            finally:
+                                # 실행 종료 알림 (모든 기기 버튼 활성화용)
+                                await local_manager.broadcast(WsMessage(type="status", payload={"status": "ready", "session_id": sid}))
 
-                        # 이미지 없는 경우에만 직접 실행
-                        agent = await _get_or_create_agent()
-                        config = _make_config(session_id)
-                        current_state = agent.get_state(config)
-                        existing_images = current_state.values.get("uploaded_images", []) if current_state.values else []
-                        
-                        state = await _initial_state(chat_payload, session_id, existing_images)
-                        await execute_agent(session_id, state=state)
+                    # 백그라운드 태스크로 실행하여 다른 메시지(세션 삭제 등) 처리를 방해하지 않음
+                    asyncio.create_task(process_chat_sequentially(session_id, msg, chat_payload))
                     
                 elif msg.type == "approval_response":
                     raw_data = json.loads(raw_msg)
