@@ -536,7 +536,8 @@
                     }
                     // 11. 에이전트 상태 동기화 (Busy/Ready)
                     else if (type === "status") {
-                        if (data.session_id === currentSessionId) {
+                        if (data.session_id && currentSessionId && 
+                            data.session_id.toLowerCase() === currentSessionId.toLowerCase()) {
                             setAgentBusy(data.status === "busy");
                         }
                     }
@@ -699,6 +700,9 @@
             if (!currentSessionId) {
                 createNewSession();
             }
+
+            // [추가] 전송 즉시 로컬 UI 잠금 (낙관적 락)
+            setAgentBusy(true);
 
             // UI 업데이트
             appendMessage(text || "이미지 전송", "user", selectedImages);
