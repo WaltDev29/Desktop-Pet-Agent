@@ -1,0 +1,35 @@
+{
+  "mcpServers": {
+    "zerolib-email": {
+      "command": "uvx",
+      "args": [
+        "mcp-email-server@latest",
+        "stdio"
+      ],
+      "env": {
+        "MCP_EMAIL_SERVER_ACCOUNT_NAME": "account-name",
+        "MCP_EMAIL_SERVER_FULL_NAME": "full-name",
+        "MCP_EMAIL_SERVER_EMAIL_ADDRESS": "[EMAIL_ADDRESS]",
+        "MCP_EMAIL_SERVER_USER_NAME": "[EMAIL_ADDRESS]",
+        "MCP_EMAIL_SERVER_PASSWORD": "app-password",
+        "MCP_EMAIL_SERVER_IMAP_HOST": "imap.domain.com",
+        "MCP_EMAIL_SERVER_IMAP_PORT": "993",
+        "MCP_EMAIL_SERVER_SMTP_HOST": "smtp.domain.com",
+        "MCP_EMAIL_SERVER_SMTP_PORT": "465"
+      }
+    },
+    "windows-mcp": {
+      "command": "uvx",
+      "args": [
+        "windows-mcp"
+      ],
+      "env": {
+        "WINDOWS_MCP_SCREENSHOT_SCALE": "0.5",
+        "WINDOWS_MCP_SCREENSHOT_BACKEND": "auto",
+        "WINDOWS_MCP_PROFILE_SNAPSHOT": "false",
+        "ANONYMIZED_TELEMETRY": "true",
+        "WINDOWS_MCP_DEBUG": "false"
+      }
+    }
+  }
+}

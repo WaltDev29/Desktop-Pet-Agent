@@ -26,20 +26,15 @@ Desktop Pet Agent는 데스크톱 화면 위에서 동작하는 캐릭터 기반
 
 ### 2. 설치 방법
 
-프로젝트는 Agent 서버, Pet UI, 그리고 MCP 서버를 위해 총 3개의 분리된 Conda 환경을 사용합니다. 
+프로젝트는 Agent 서버와 Pet UI를 위해 각각 분리된 Conda 환경을 사용합니다. MCP 서버는 `config.json` 설정을 통해 동적으로 실행됩니다.
 
 ```bash
-# 1. MCP 서버 환경 설정 (스크린샷, 마우스/키보드 제어 등 OS 상호작용)
-cd mcp
-conda env create -f environment.yml
-conda activate mcp
-
-# 2. Agent 서버 환경 설정 (LangGraph 기반 AI 모델 서버)
+# 1. Agent 서버 환경 설정 (LangGraph 기반 AI 모델 서버)
 cd agent
 conda env create -f environment.yml
 conda activate desktop-pet-agent
 
-# 3. Pet UI 환경 설정 (사용자 인터페이스)
+# 2. Pet UI 환경 설정 (사용자 인터페이스)
 cd pet
 conda env create -f environment.yml
 conda activate pet-ui
@@ -47,9 +42,10 @@ conda activate pet-ui
 
 <br>
 
-### 3. 환경 변수 설정 (`.env`)
+### 3. 환경 변수 및 MCP 설정
 
-`agent/` 디렉토리에 `.env.example` 파일 이름을 `env`로 수정하고, 사용자 환경에 맞게 수정합니다.
+1.  **`.env` 설정**: `agent/` 디렉토리에 있는 `.env.example` 파일을 복사하여 `.env`를 생성하고 LLM API 키 등을 입력합니다.
+2.  **`config.json` 설정**: `agent/agent_server/` 디렉토리의 `config.default.json`을 복사하여 `config.json`을 생성합니다. 여기에 사용할 MCP 서버들의 실행 명령과 환경 변수를 정의합니다.
 
 <br>
 
@@ -81,7 +77,8 @@ python main.py
 
 - **Planner**: 사용자 요청을 분석하여 단계별 실행 계획을 수립합니다.
 - **Master Router**: 현재 작업을 처리할 워커로 적절하게 태스크를 라우팅합니다.
-- **Windows MCP Worker**: `windows-mcp`를 통해 화면 캡처, OCR, 윈도우 파일 시스템 조작, 파워쉘 제어, 브라우저 관리 및 데스크탑 상호작용의 모든 역할을 수행하는 전문가 노드입니다.
+- **General MCP Worker**: `config.json`에 정의된 모든 MCP 서버(Windows 제어, 이메일, 외부 서비스 등)를 통합 관리하고 도구를 실행하는 범용 워커 노드입니다.
+- **Vision Worker**: 사용자가 업로드한 이미지를 분석하여 시각적 정보를 텍스트로 변환합니다.
 - **Aggregator**: 모든 작업 결과를 취합하여 사용자에게 친절한 답변을 생성합니다.
 - **MemorySaver**: 대화 내용 및 에이전트의 상태를 스레드별로 유지하여 멀티 턴 대화를 지원합니다.
 
@@ -89,10 +86,10 @@ python main.py
 
 ## ✨ 주요 기능
 - **캐릭터 기반 GUI**: 화면 위를 자유롭게 이동하며 상호작용하는 펫 캐릭터.
-- **MCP 기반 OS 제어 (Windows MCP)**: 마우스/키보드 직접 입력, 스크린샷 바탕의 시각적 인식, 쉘(Shell) 조작 등을 통한 완벽한 데스크탑 제어.
-- **지능형 작업 실행**: 복잡한 명령(예: "브라우저를 켜서 닐슨 노먼 그룹 홈페이지에 들어가줘")을 언어 모델이 인지하고 단계별 분할 실행.
-- **Human-in-the-Loop**: 위험한 파워쉘 명령어 작동 등 파괴적 행동 수행 전 Agent UI를 통한 사전 승인 체계.
-- **상태 최적화 기술**: 이미지 전송 토큰 비용을 줄이기 위한 Context History 최적화 (순수 텍스트 히스토리 필터링).
+- **동적 MCP 확장**: `config.json` 수정만으로 새로운 기능을 가진 MCP 서버를 즉시 추가하고 실행 가능.
+- **범용 OS & 서비스 제어**: 마우스/키보드 직접 입력, 시각적 인식, 쉘(Shell) 조작뿐만 아니라 이메일, 클라우드 서비스 등 다양한 외부 기능 연동.
+- **지능형 작업 실행**: 복잡한 명령을 언어 모델이 인지하고 단계별 분할 실행.
+- **Human-in-the-Loop**: 위험한 명령어 작동 등 파괴적 행동 수행 전 Agent UI를 통한 사전 승인 체계.
 
 <br>
 

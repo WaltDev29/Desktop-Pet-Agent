@@ -77,3 +77,5 @@ dmypy.json
 # MacOS
 .DS_Store
 
+# MCP Config
+config.json

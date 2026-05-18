@@ -13,6 +13,7 @@ LangGraph 그래프를 구성하는 모든 노드 및 조건부 엣지 함수를
   /approve API에서 Command(resume=True/False)로 재개하면 Worker가 이어서 실행됩니다.
 """
 
+import os
 import json
 import logging
 from typing import Literal
@@ -27,7 +28,7 @@ from prompts.agents_prompts import (
     PLANNER_PROMPT,
     ROUTER_PROMPT,
     VISION_WORKER_PROMPT,
-    WINDOWS_MCP_WORKER_PROMPT,
+    GENERAL_MCP_WORKER_PROMPT,
     AGGREGATOR_PROMPT,
 )
 
@@ -39,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 # Structured Output 모델: Master Router가 반환할 worker 이름
 class WorkerDecision(BaseModel):
-    worker: Literal["vision_worker", "windows_mcp_worker"]
+    worker: Literal["vision_worker", "general_mcp_worker"]
 
 # 실행 계획 모델
 class ExecutionPlan(BaseModel):
@@ -55,11 +56,29 @@ MAX_TOOL_CALLS = 15
 # 1. Planner Node
 # ==========================================
 
-def make_planner_node(llm: Runnable):
+def make_planner_node(llm: Runnable, tools: list = None):
     """
     사용자의 요청을 분석해 단계별 실행 계획(Plan)을 수립합니다.
     """
     planner_llm = llm.with_structured_output(ExecutionPlan)
+    
+    # 도구 정보 요약 생성
+    if tools:
+        tools_list = []
+        for t in tools:
+            desc = t.description.split("\n")[0] # 첫 줄만 사용해 간결하게 유지
+            tools_list.append(f"- {t.name}: {desc}")
+        tools_info = "\n".join(tools_list)
+    else:
+        tools_info = "No specific tools provided."
+
+    # 환경 정보 추출
+    user_profile = os.environ.get("USERPROFILE", "Unknown")
+    user_name = os.environ.get("USERNAME", "Unknown")
+    env_info = f"- Current User: {user_name}\n- User Profile Path: {user_profile}"
+
+    # 프롬프트에 도구 정보 및 환경 정보 주입
+    system_prompt = PLANNER_PROMPT.format(tools_info=tools_info, env_info=env_info)
 
     async def planner_node(state: AgentState):
         # 가장 마지막 HumanMessage를 원본 요청으로 저장 (Aggregator에서 정확하게 참조)
@@ -91,7 +110,7 @@ def make_planner_node(llm: Runnable):
         hint = f"\n\n[System Hint: User has uploaded {image_count} image(s).]" if image_count > 0 else ""
         
         # 메시지 조합 (SystemMessage + History + optional Hint)
-        input_msgs = [SystemMessage(content=PLANNER_PROMPT)] + chat_history
+        input_msgs = [SystemMessage(content=system_prompt)] + chat_history
         if hint:
             input_msgs.append(HumanMessage(content=hint))
 
@@ -375,12 +394,19 @@ def _make_base_worker(llm_with_tools: Runnable, system_prompt: str, worker_label
 # 3-1. Windows MCP Worker Node
 # ==========================================
 
-def make_windows_mcp_worker(llm_with_tools: Runnable):
-    """windows-mcp의 모든 도구를 담당하는 단일 Worker."""
+def make_general_mcp_worker(llm_with_tools: Runnable):
+    """모든 MCP 도구를 담당하는 범용 Worker."""
+    # 환경 정보 추출
+    user_profile = os.environ.get("USERPROFILE", "Unknown")
+    user_name = os.environ.get("USERNAME", "Unknown")
+    env_info = f"- Current User: {user_name}\n- User Profile Path: {user_profile}"
+
+    system_prompt = GENERAL_MCP_WORKER_PROMPT.format(env_info=env_info)
+
     return _make_base_worker(
         llm_with_tools,
-        system_prompt=WINDOWS_MCP_WORKER_PROMPT,
-        worker_label="windows_mcp_worker",
+        system_prompt=system_prompt,
+        worker_label="general_mcp_worker",
     )
 
 
@@ -498,10 +524,10 @@ def route_planner(state: AgentState) -> Literal["master_router", "aggregator"]:
     return "master_router" if state.get("plan") else "aggregator"
 
 
-def route_master_router(state: AgentState) -> Literal["vision_worker", "windows_mcp_worker", "aggregator"]:
+def route_master_router(state: AgentState) -> Literal["vision_worker", "general_mcp_worker", "aggregator"]:
     """Router가 선택한 worker로 이동. active_worker가 없으면 모든 계획 완료."""
     worker = state.get("active_worker", "")
-    if worker in ("vision_worker", "windows_mcp_worker"):
+    if worker in ("vision_worker", "general_mcp_worker"):
         return worker
     return "aggregator"
 
@@ -518,12 +544,12 @@ def route_worker(state: AgentState) -> Literal["tools", "master_router"]:
     return "master_router"
 
 
-def route_tools(state: AgentState) -> Literal["vision_worker", "windows_mcp_worker"]:
+def route_tools(state: AgentState) -> Literal["vision_worker", "general_mcp_worker"]:
     """도구 실행 완료 후 original_request한 Worker로 정확히 복귀."""
-    return state.get("active_worker", "windows_mcp_worker")
+    return state.get("active_worker", "general_mcp_worker")
 
 
-def route_entry(state: AgentState) -> Literal["planner", "master_router", "vision_worker", "windows_mcp_worker"]:
+def route_entry(state: AgentState) -> Literal["planner", "master_router", "vision_worker", "general_mcp_worker"]:
 
     """
     진입점 라우터.
