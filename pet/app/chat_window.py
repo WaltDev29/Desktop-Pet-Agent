@@ -304,6 +304,7 @@ class ChatWindow(QWidget):
         # 채팅 히스토리에 사용자 메시지 표시
         display_text = text if text else "(이미지 전송)"
         formatted_text = display_text
+        formatted_text = display_text
         if images:
             for image_uri in images:
                 formatted_text += f"\n\n![이미지]({image_uri})"

@@ -8,6 +8,8 @@ QFrame#main_container {
 
 import html
 
+import html
+
 FONT_FAMILY = "'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', '맑은 고딕', sans-serif"
 
 try:
