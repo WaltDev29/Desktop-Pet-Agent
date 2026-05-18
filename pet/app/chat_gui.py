@@ -133,10 +133,10 @@ class BubbleFrame(QFrame):
         path.closeSubpath()
         
         # 말풍선 내부 채우기 (약간의 투명도 포함)
-        painter.fillPath(path, QColor(255, 255, 255, 245))
+        painter.fillPath(path, QColor(34, 34, 34, 245))
 
         # 테두리 그리기
-        pen = QPen(QColor("#e0e0e0"))
+        pen = QPen(QColor("#444444"))
         pen.setWidth(2)
         painter.setPen(pen)
         painter.drawPath(path)

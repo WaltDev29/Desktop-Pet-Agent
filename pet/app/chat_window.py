@@ -161,9 +161,7 @@ class ChatWindow(QWidget):
         self.settings_btn.clicked.connect(self.open_settings)
         
         top_btn_layout.addWidget(self.sidebar_toggle_btn)
-        top_btn_layout.addWidget(self.new_chat_btn)
         top_btn_layout.addStretch()
-        top_btn_layout.addWidget(self.settings_btn)
 
         self.input_field = ChatInputField()
         self.input_field.setPlaceholderText("무엇을 도와드릴까요?")
@@ -196,14 +194,10 @@ class ChatWindow(QWidget):
         input_layout.addWidget(self.attach_btn)
         input_layout.addWidget(self.input_field)
 
-        # ── 하단 버튼 행 ──────────────────────────────────
-        bottom_layout = QHBoxLayout()
+        # ── 하단 버튼 행 (종료 버튼) ──────────────────────────────────
         self.close_btn = QPushButton("종료")
         self.close_btn.setStyleSheet(CLOSE_BTN_STYLE)
         self.close_btn.clicked.connect(self.close_program)
-
-        bottom_layout.addStretch()
-        bottom_layout.addWidget(self.close_btn)
 
 
         # ── 채팅 영역 위젯 (우측) ────────────────────────────
@@ -216,7 +210,6 @@ class ChatWindow(QWidget):
         chat_area_layout.addWidget(self.btn_area)
         chat_area_layout.addWidget(self.image_preview_area)
         chat_area_layout.addLayout(input_layout)
-        chat_area_layout.addLayout(bottom_layout)
 
         # ── 수평 분할: 사이드바(좌) + 채팅 영역(우) ──────────
         inner_h_layout = QHBoxLayout()
@@ -377,8 +370,11 @@ class ChatWindow(QWidget):
         panel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
 
         panel_layout = QVBoxLayout(panel)
-        panel_layout.setContentsMargins(0, 8, 0, 8)
-        panel_layout.setSpacing(2)
+        panel_layout.setContentsMargins(8, 12, 8, 12)
+        panel_layout.setSpacing(8)
+
+        # 상단 신규 채팅 버튼
+        panel_layout.addWidget(self.new_chat_btn)
 
         # 헤더
         header = QLabel("채팅 목록")
@@ -409,6 +405,14 @@ class ChatWindow(QWidget):
         # 현재 세션 항목 추가 (초기 세션)
         self._add_session_item(self.current_session)
         self._update_session_highlight()
+        
+        # 하단 설정 / 종료 버튼 영역
+        panel_bottom_layout = QVBoxLayout()
+        panel_bottom_layout.setSpacing(6)
+        panel_bottom_layout.addWidget(self.settings_btn)
+        panel_bottom_layout.addWidget(self.close_btn)
+        
+        panel_layout.addLayout(panel_bottom_layout)
 
         return panel
 

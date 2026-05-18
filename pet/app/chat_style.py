@@ -78,20 +78,32 @@ APPROVE_BTN_STYLE = f"background-color: #5cb85c; {BTN_BASE_STYLE}"
 REJECT_BTN_STYLE = f"background-color: #d9534f; {BTN_BASE_STYLE}"
 
 INPUT_FIELD_STYLE = """
-QLineEdit {
-    background-color: #F2F2F2;
-    color: black;
+QTextEdit {
+    background-color: #1E2A38;
+    color: #E0E0E0;
     border-radius: 15px;
-    border: 1px solid #E0E0E0;
+    border: 1px solid #2C3E50;
     padding: 8px 12px;
     font-size: 13px;
 }
-QLineEdit:focus {
-    border: 1px solid #A0A0A0;
+QTextEdit:focus {
+    border: 1px solid #3498DB;
 }
 """
 
-CLOSE_BTN_STYLE = "background-color: #FF5F56; color: white; border-radius: 10px; font-weight: bold; font-size: 11px;"
+CLOSE_BTN_STYLE = """
+QPushButton {
+    background-color: #FF5F56;
+    color: white;
+    border-radius: 8px;
+    font-weight: bold;
+    font-size: 13px;
+    padding: 10px 16px;
+}
+QPushButton:hover {
+    background-color: #E0483E;
+}
+"""
 
 ATTACH_BTN_STYLE = """
 QPushButton {
@@ -115,10 +127,10 @@ NEW_CHAT_BTN_STYLE = """
 QPushButton {
     background-color: #2979B0;
     color: white;
-    border-radius: 12px;
+    border-radius: 8px;
     font-weight: bold;
-    font-size: 12px;
-    padding: 6px 16px;
+    font-size: 13px;
+    padding: 10px 16px;
 }
 QPushButton:hover {
     background-color: #1A5F8F;
@@ -135,15 +147,15 @@ QWidget#image_preview_area {
 
 SETTINGS_BTN_STYLE = """
 QPushButton {
-    background-color: #F0F0F0;
-    color: #333333;
-    border-radius: 12px;
+    background-color: #333333;
+    color: white;
+    border-radius: 8px;
     font-weight: bold;
-    font-size: 12px;
-    padding: 6px 16px;
+    font-size: 13px;
+    padding: 10px 16px;
 }
 QPushButton:hover {
-    background-color: #E0E0E0;
+    background-color: #444444;
 }
 """
 
