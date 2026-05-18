@@ -5,7 +5,8 @@ import uvicorn
 
 from app import create_app
 from app.pet_window import PetWindow, QApplication
-from app.chat_window import ChatWindow, ChatSignaler
+from app.chat_window import ChatWindow
+from app.chat_network import ChatSignaler # Not directly used but good for reference if needed elsewhere or to avoid import errors if main expects it.
 
 def run_ui():
     """별도 스레드에서 UI 실행"""
