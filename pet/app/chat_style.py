@@ -95,17 +95,33 @@ CLOSE_BTN_STYLE = "background-color: #FF5F56; color: white; border-radius: 10px;
 
 ATTACH_BTN_STYLE = """
 QPushButton {
-    background-color: transparent;
-    color: #888888;
-    border: none;
-    font-size: 18px;
-    padding: 2px 4px;
+    background-color: #E0E0E0;
+    color: #333333;
+    border-radius: 8px;
+    font-weight: bold;
+    font-size: 12px;
+    padding: 6px 12px;
 }
 QPushButton:hover {
-    color: #555555;
+    background-color: #D0D0D0;
 }
 QPushButton:disabled {
-    color: #CCCCCC;
+    background-color: #F0F0F0;
+    color: #AAAAAA;
+}
+"""
+
+NEW_CHAT_BTN_STYLE = """
+QPushButton {
+    background-color: #2979B0;
+    color: white;
+    border-radius: 12px;
+    font-weight: bold;
+    font-size: 12px;
+    padding: 6px 16px;
+}
+QPushButton:hover {
+    background-color: #1A5F8F;
 }
 """
 
@@ -115,6 +131,34 @@ QWidget#image_preview_area {
     border: 1px dashed #D0D0D0;
     border-radius: 10px;
 }
+"""
+
+SETTINGS_BTN_STYLE = """
+QPushButton {
+    background-color: #F0F0F0;
+    color: #333333;
+    border-radius: 12px;
+    font-weight: bold;
+    font-size: 12px;
+    padding: 6px 16px;
+}
+QPushButton:hover {
+    background-color: #E0E0E0;
+}
+"""
+
+SETTINGS_WINDOW_STYLE = f"""
+QFrame#settings_container {{
+    background-color: rgba(255, 255, 255, 245);
+    border: 2px solid #E0E0E0;
+    border-radius: 15px;
+}}
+QLabel {{
+    color: #333333;
+    font-family: {FONT_FAMILY};
+    font-size: 13px;
+    font-weight: bold;
+}}
 """
 
 IMAGE_REMOVE_BTN_STYLE = """
@@ -135,8 +179,10 @@ QPushButton:hover {
 }
 """
 
-WINDOW_WIDTH = 300
-WINDOW_HEIGHT = 400
+WINDOW_WIDTH = 450
+WINDOW_HEIGHT = 700
+SIDEBAR_WIDTH = 180  # 사이드바 열림 시 너비 (px)
+SIDEBAR_EXPANDED_WINDOW_WIDTH = WINDOW_WIDTH + SIDEBAR_WIDTH  # 사이드바 열림 시 전체 창 너비
 
 # ── 개별 말풍선(QTextBrowser) 위젯 최대 높이 임계값 (px) ──
 # 이 높이를 초과하면 말풍선 내부에 스크롤바가 생김
@@ -267,5 +313,98 @@ QScrollBar::handle:vertical:hover {{
 }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
     height: 0px;
+}}
+"""
+
+# ── 사이드바 토글 버튼 ──
+SIDEBAR_TOGGLE_BTN_STYLE = """
+QPushButton {
+    background-color: transparent;
+    color: #888888;
+    border: none;
+    font-size: 18px;
+    font-weight: bold;
+    padding: 4px 6px;
+    border-radius: 8px;
+    min-width: 28px;
+    max-width: 28px;
+}
+QPushButton:hover {
+    background-color: rgba(0,0,0,60);
+    color: #FFFFFF;
+}
+"""
+
+# ── 사이드바 패널 전체 배경 ──
+SIDEBAR_STYLE = f"""
+QWidget#sidebar_panel {{
+    background-color: #1A1A1A;
+    border-right: 1px solid #333333;
+    border-radius: 0px;
+}}
+QLabel#sidebar_header {{
+    color: #AAAAAA;
+    font-family: {FONT_FAMILY};
+    font-size: 11px;
+    font-weight: bold;
+    padding: 4px 8px;
+    letter-spacing: 1px;
+}}
+"""
+
+# ── 사이드바 개별 세션 항목 버튼 ──
+SESSION_ITEM_STYLE = f"""
+QPushButton {{
+    background-color: transparent;
+    color: #CCCCCC;
+    border: none;
+    border-radius: 8px;
+    font-family: {FONT_FAMILY};
+    font-size: 12px;
+    font-weight: normal;
+    text-align: left;
+    padding: 8px 10px;
+    margin: 1px 4px;
+}}
+QPushButton:hover {{
+    background-color: rgba(255,255,255,12);
+    color: #FFFFFF;
+}}
+"""
+
+# ── 현재 선택된 세션 항목 강조 ──
+SESSION_ITEM_ACTIVE_STYLE = f"""
+QPushButton {{
+    background-color: rgba(41,121,176,180);
+    color: #FFFFFF;
+    border: none;
+    border-radius: 8px;
+    font-family: {FONT_FAMILY};
+    font-size: 12px;
+    font-weight: bold;
+    text-align: left;
+    padding: 8px 10px;
+    margin: 1px 4px;
+}}
+QPushButton:hover {{
+    background-color: rgba(41,121,176,220);
+}}
+"""
+
+# ── 사이드바 내 신규 채팅 버튼 ──
+SIDEBAR_NEW_CHAT_BTN_STYLE = f"""
+QPushButton {{
+    background-color: rgba(41,121,176,150);
+    color: #FFFFFF;
+    border: 1px solid rgba(41,121,176,200);
+    border-radius: 10px;
+    font-family: {FONT_FAMILY};
+    font-weight: bold;
+    font-size: 12px;
+    padding: 7px 10px;
+    margin: 4px 6px;
+}}
+QPushButton:hover {{
+    background-color: rgba(41,121,176,220);
 }}
 """
