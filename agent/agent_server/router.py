@@ -276,6 +276,11 @@ async def handle_gateway_sync(msg_type: str, payload: dict):
         if session_id:
             from graph.checkpointer import delete_session_checkpoints
             await delete_session_checkpoints(session_id, user_id)
+    elif msg_type == "session_sync":
+        valid_sessions = payload.get("sessions", [])
+        user_id = payload.get("user_id")
+        from graph.checkpointer import clean_orphaned_checkpoints
+        await clean_orphaned_checkpoints(valid_sessions, user_id)
             
     # WsMessage(type=msg_type, payload=payload)를 생성하여 브로드캐스트
     # entity.py의 WsMessage 규격을 따르되 payload는 raw dict를 허용함
