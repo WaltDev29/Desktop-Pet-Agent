@@ -243,16 +243,21 @@ async def websocket_endpoint(
                 await manager.send_to_role(user_id, target_role, data)
                 
             elif msg_type == "done":
-                # Finalize message in DB
+                # 1. 버퍼에 남아있는 스트리밍 토큰들을 DB에 먼저 반영
+                await manager.flush_tokens_to_db()
+                
+                # 2. 메시지 완료 상태 처리
                 stmt = select(Message).where(Message.message_id == uuid.UUID(message_id))
                 result = await db.execute(stmt)
                 msg = result.scalar_one_or_none()
                 if msg:
                     msg.status = "done"
-                    msg.content = payload.get("final_message", msg.content)
+                    final_msg = payload.get("final_message")
+                    # 에이전트의 final_message가 비어있지 않은 유효한 텍스트일 때만 덮어씌움
+                    if final_msg:
+                        msg.content = final_msg
                     await db.commit()
                 
-                await manager.flush_tokens_to_db() # Force flush
                 await manager.send_to_role(user_id, target_role, data)
 
             elif msg_type in ["approval_request", "approval_response"]:
