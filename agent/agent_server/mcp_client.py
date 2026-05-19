@@ -187,6 +187,8 @@ def _register_email_mcp(config: dict) -> None:
             "MCP_EMAIL_SERVER_IMAP_PORT":                  str(cfg.get("mcp.email_mcp.imap_port", "993")),
             "MCP_EMAIL_SERVER_SMTP_HOST":                  smtp_host,
             "MCP_EMAIL_SERVER_SMTP_PORT":                  str(cfg.get("mcp.email_mcp.smtp_port", "465")),
+            "MCP_EMAIL_SERVER_SMTP_SSL":                   str(cfg.get("mcp.email_mcp.smtp_use_ssl", "true")).lower(),
+            "MCP_EMAIL_SERVER_SMTP_START_SSL":             str(cfg.get("mcp.email_mcp.smtp_start_tls", "false")).lower(),
             "MCP_EMAIL_SERVER_ENABLE_ATTACHMENT_DOWNLOAD": str(cfg.get("mcp.email_mcp.enable_attachment_download", "false")),
         },
     }

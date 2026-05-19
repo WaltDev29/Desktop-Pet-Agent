@@ -40,6 +40,7 @@ REDIRECT_URI = f"http://localhost:{CALLBACK_PORT}/callback"
 
 # config.json 저장 키
 NOTION_TOKEN_KEY = "notion_oauth"
+TOKEN_REFRESH_SKEW_SECONDS = 10 * 60
 
 
 # ==========================================
@@ -244,13 +245,47 @@ async def refresh_access_token(metadata: dict, client_id: str, refresh_token: st
 # 메인: 토큰 획득 (신규 or 갱신)
 # ==========================================
 
-async def get_valid_token(cfg) -> str:
+def invalidate_token(cfg, *, reason: str = "") -> None:
+    """
+    저장된 Notion access_token을 폐기합니다.
+
+    SSE 호출 중 401 Unauthorized가 발생한 경우 호출부에서 이 함수를 실행한 뒤
+    get_valid_token(..., force_refresh=True)로 새 토큰을 받아 MCP client를 다시
+    생성하면 됩니다. refresh_token과 client_id는 보존해서 브라우저 재인증 없이
+    refresh를 우선 시도합니다.
+    """
+    saved = cfg.get(NOTION_TOKEN_KEY) or {}
+    if not saved:
+        return
+
+    saved["access_token"] = ""
+    saved["expires_at"] = 0
+    cfg.save({NOTION_TOKEN_KEY: saved})
+
+    suffix = f" ({reason})" if reason else ""
+    logger.warning(f"[Notion OAuth] access_token 무효화{suffix}")
+
+
+async def get_valid_token(
+    cfg,
+    *,
+    force_refresh: bool = False,
+    min_ttl_seconds: int = TOKEN_REFRESH_SKEW_SECONDS,
+) -> str:
     """
     config.json의 notion_oauth 섹션에서 유효한 access_token을 반환합니다.
     없거나 만료됐으면 갱신 또는 신규 발급합니다.
 
+    Notion MCP의 SSE 연결은 tool 호출 중 오래 유지될 수 있습니다. 생성 계열
+    tool이 1~3분 이상 걸리는 경우 만료 직전 access_token을 재사용하면 호출
+    도중 401 Unauthorized가 발생할 수 있으므로, 기본적으로 10분 미만의 TTL이
+    남은 토큰은 미리 refresh합니다.
+
     Args:
         cfg: config 모듈 (cfg.get / cfg.save 사용)
+        force_refresh: True면 access_token이 아직 유효해도 refresh_token 갱신을
+            우선 시도합니다. 401 Unauthorized 복구 플로우에서 사용합니다.
+        min_ttl_seconds: 이 시간보다 적게 남은 토큰은 만료 임박으로 보고 갱신합니다.
 
     Returns:
         유효한 access_token 문자열
@@ -268,15 +303,23 @@ async def get_valid_token(cfg) -> str:
     if not metadata:
         metadata = await discover_oauth_metadata(MCP_URL)
 
-    # --- 토큰이 있고 아직 유효한 경우 ---
-    if access_token and time.time() < expires_at - 60:
-        logger.info("[Notion OAuth] 저장된 토큰 유효, 재사용")
+    now = time.time()
+    ttl = expires_at - now
+
+    # --- 토큰이 있고 충분히 오래 유효한 경우 ---
+    if access_token and not force_refresh and ttl > min_ttl_seconds:
+        logger.info(f"[Notion OAuth] 저장된 토큰 유효, 재사용 (TTL: {int(ttl)}초)")
         return access_token
 
     # --- refresh_token으로 갱신 ---
     if refresh_token and client_id:
         try:
-            logger.info("[Notion OAuth] access_token 만료 → refresh_token으로 갱신 시도")
+            if force_refresh:
+                logger.info("[Notion OAuth] force_refresh=True → refresh_token으로 갱신 시도")
+            elif access_token:
+                logger.info(f"[Notion OAuth] access_token 만료 임박/만료 (TTL: {int(ttl)}초) → refresh_token으로 갱신 시도")
+            else:
+                logger.info("[Notion OAuth] access_token 없음 → refresh_token으로 갱신 시도")
             token = await refresh_access_token(metadata, client_id, refresh_token)
             _save_token(cfg, token, client_id, metadata)
             return token["access_token"]
