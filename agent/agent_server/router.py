@@ -268,6 +268,15 @@ async def handle_gateway_approve(payload: ApprovalResponsePayload):
 async def handle_gateway_sync(msg_type: str, payload: dict):
     """게이트웨이로부터 받은 세션 동기화 이벤트를 로컬 UI로 전달합니다."""
     logger.info(f"[GatewayHandler] Received sync event: {msg_type}")
+    
+    if msg_type == "session_deleted":
+        session_id = payload.get("session_id")
+        # 추후 멀티 유저 확장을 대비해 페이로드에서 user_id 수신 시도
+        user_id = payload.get("user_id")
+        if session_id:
+            from graph.checkpointer import delete_session_checkpoints
+            await delete_session_checkpoints(session_id, user_id)
+            
     # WsMessage(type=msg_type, payload=payload)를 생성하여 브로드캐스트
     # entity.py의 WsMessage 규격을 따르되 payload는 raw dict를 허용함
     await local_manager.broadcast(WsMessage(type=msg_type, payload=payload))
