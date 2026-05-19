@@ -68,7 +68,10 @@ async def delete_session_checkpoints(session_id: str, user_id: str = None):
             await conn.execute("DELETE FROM checkpoint_writes WHERE thread_id = %s", (thread_id,))
             logger.info(f"[Checkpointer] 세션 {session_id}의 에이전트 상태가 DB에서 정리되었습니다 (thread_id: {thread_id}).")
     except Exception as e:
-        logger.error(f"[Checkpointer] 세션 상태 삭제 중 오류 발생: {e}")
+        if "does not exist" in str(e):
+            logger.info(f"[Checkpointer] checkpoints 테이블이 아직 생성되지 않아 세션 {session_id} 삭제 처리를 스킵합니다. (첫 대화 시 자동 생성 예정)")
+        else:
+            logger.error(f"[Checkpointer] 세션 상태 삭제 중 오류 발생: {e}")
 
 async def clean_orphaned_checkpoints(valid_sessions: list, user_id: str = None):
     """
@@ -105,4 +108,7 @@ async def clean_orphaned_checkpoints(valid_sessions: list, user_id: str = None):
             else:
                 logger.info("[Checkpointer] 찌꺼기 상태가 없습니다. (Clean)")
     except Exception as e:
-        logger.error(f"[Checkpointer] 찌꺼기 상태 청소 중 오류 발생: {e}")
+        if "does not exist" in str(e):
+            logger.info("[Checkpointer] checkpoints 테이블이 아직 생성되지 않아 찌꺼기 상태 정리를 스킵합니다. (첫 대화 시 자동 생성 예정)")
+        else:
+            logger.error(f"[Checkpointer] 찌꺼기 상태 청소 중 오류 발생: {e}")
