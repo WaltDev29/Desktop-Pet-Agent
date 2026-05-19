@@ -21,7 +21,8 @@
     "windows-mcp": {
       "command": "uvx",
       "args": [
-        "windows-mcp"
+        "windows-mcp",
+        "serve"
       ],
       "env": {
         "WINDOWS_MCP_SCREENSHOT_SCALE": "0.5",
