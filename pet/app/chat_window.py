@@ -1,16 +1,15 @@
-import threading
 import html
 import json
 import base64
 import os
 
 from PySide6.QtWidgets import (
-    QWidget, QTextEdit, QVBoxLayout, QPushButton, QHBoxLayout,
-    QApplication, QFrame, QGraphicsDropShadowEffect, QLabel,
-    QFileDialog, QScrollArea, QSizePolicy, QSlider
+    QWidget, QTextEdit, QTextBrowser, QVBoxLayout, QPushButton, QHBoxLayout,
+    QApplication, QGraphicsDropShadowEffect, QLabel,
+    QFileDialog, QScrollArea, QSlider
 )
-from PySide6.QtCore import Qt, Signal, QObject, QRectF, QPoint, QTimer, QEvent, QRect
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap, QCursor
+from PySide6.QtCore import Qt, Signal, QPoint, QTimer, QEvent, QRect, QUrl
+from PySide6.QtGui import QColor, QPixmap, QCursor, QDesktopServices
 
 from app.chat_style import (
     CHAT_HISTORY_STYLE, 
@@ -27,152 +26,28 @@ from app.chat_style import (
     PET_MSG_FORMAT,
     ERROR_MSG_FORMAT,
     OPACITY_SLIDER_STYLE,
-    OPACITY_LABEL_STYLE
+    OPACITY_LABEL_STYLE,
+    convert_markdown_to_html,
+    BUBBLE_MAX_HEIGHT,
+    USER_BUBBLE_STYLE,
+    PET_BUBBLE_STYLE,
+    ERROR_BUBBLE_STYLE,
+    CHAT_SCROLL_AREA_STYLE,
+    THINKING_LINK_COLLAPSED,
+    THINKING_LINK_EXPANDED,
+    THINKING_CONTENT_DIV,
 )
 
-class ChatSignaler(QObject):
-    response_received = Signal(dict)
-    error_occurred = Signal(str)
-
-class ChatInputField(QTextEdit):
-    returnPressed = Signal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedHeight(50)
-        self.setAcceptRichText(False)
-
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Return and not event.modifiers() & Qt.ShiftModifier:
-            self.returnPressed.emit()
-            event.accept()
-        else:
-            super().keyPressEvent(event)
-
-class BubbleFrame(QFrame):
-    # 드래그 시작을 알리는 시그널 (글로벌 마우스 위치)
-    drag_started = Signal(QPoint)
-    drag_moved = Signal(QPoint)
-    drag_finished = Signal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._drag_active = False
-        self._press_pos = None
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self._press_pos = event.globalPosition().toPoint()
-            self._drag_active = False
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if self._press_pos is not None and event.buttons() & Qt.LeftButton:
-            delta = event.globalPosition().toPoint() - self._press_pos
-            if not self._drag_active and delta.manhattanLength() > 5:
-                self._drag_active = True
-                self.drag_started.emit(self._press_pos)
-            if self._drag_active:
-                self.drag_moved.emit(event.globalPosition().toPoint())
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton and self._drag_active:
-            self.drag_finished.emit()
-        self._drag_active = False
-        self._press_pos = None
-        super().mouseReleaseEvent(event)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        
-        rect = self.rect()
-        tail_height = 15
-        tail_width = 20
-        radius = 15
-        
-        body_rect = QRectF(1, 1, rect.width() - 2, rect.height() - tail_height - 2)
-        
-        path = QPainterPath()
-        path.moveTo(body_rect.left() + radius, body_rect.top())
-        path.lineTo(body_rect.right() - radius, body_rect.top())
-        path.arcTo(body_rect.right() - 2*radius, body_rect.top(), 2*radius, 2*radius, 90, -90)
-        
-        path.lineTo(body_rect.right(), body_rect.bottom() - radius)
-        path.arcTo(body_rect.right() - 2*radius, body_rect.bottom() - 2*radius, 2*radius, 2*radius, 0, -90)
-        
-        center_x = body_rect.center().x()
-        path.lineTo(center_x + tail_width/2, body_rect.bottom())
-        path.lineTo(center_x, body_rect.bottom() + tail_height) 
-        path.lineTo(center_x - tail_width/2, body_rect.bottom())
-        
-        path.lineTo(body_rect.left() + radius, body_rect.bottom())
-        path.arcTo(body_rect.left(), body_rect.bottom() - 2*radius, 2*radius, 2*radius, -90, -90)
-        
-        path.lineTo(body_rect.left(), body_rect.top() + radius)
-        path.arcTo(body_rect.left(), body_rect.top(), 2*radius, 2*radius, 180, -90)
-        
-        path.closeSubpath()
-        
-        painter.fillPath(path, QColor(255, 255, 255, 245))
-
-        pen = QPen(QColor("#e0e0e0"))
-        pen.setWidth(2)
-        painter.setPen(pen)
-        painter.drawPath(path)
+from app.chat_network import ChatClient
+from app.chat_handler import ChatResponseHandler
+from app.chat_gui import (
+    BubbleFrame, ChatInputField, ImagePreviewItem,
+    RESIZE_MARGIN, DIR_NONE, DIR_LEFT, DIR_RIGHT, DIR_TOP, DIR_BOTTOM, RESIZE_CURSOR_MAP,
+    fit_bubble_size, render_thinking_html, scroll_to_bottom,
+    get_resize_dir, sync_pet_with_bubble
+)
 
 MAX_IMAGES = 3
-
-# ── 리사이즈 상수 ──────────────────────────────────────────────────
-_RESIZE_MARGIN = 8
-_DIR_NONE   = 0
-_DIR_LEFT   = 1
-_DIR_RIGHT  = 2
-_DIR_TOP    = 4
-_DIR_BOTTOM = 8
-_RESIZE_CURSOR_MAP = {
-    _DIR_NONE                : Qt.CursorShape.ArrowCursor,
-    _DIR_LEFT                : Qt.CursorShape.SizeHorCursor,
-    _DIR_RIGHT               : Qt.CursorShape.SizeHorCursor,
-    _DIR_TOP                 : Qt.CursorShape.SizeVerCursor,
-    _DIR_BOTTOM              : Qt.CursorShape.SizeVerCursor,
-    _DIR_LEFT  | _DIR_TOP    : Qt.CursorShape.SizeFDiagCursor,
-    _DIR_RIGHT | _DIR_BOTTOM : Qt.CursorShape.SizeFDiagCursor,
-    _DIR_RIGHT | _DIR_TOP    : Qt.CursorShape.SizeBDiagCursor,
-    _DIR_LEFT  | _DIR_BOTTOM : Qt.CursorShape.SizeBDiagCursor,
-}
-
-class ImagePreviewItem(QWidget):
-    """이미지 미리보기 아이템 (썸네일 + 제거 버튼)"""
-    remove_requested = Signal(object)  # self
-
-    def __init__(self, file_path: str, parent=None):
-        super().__init__(parent)
-        self.file_path = file_path
-        self.setFixedSize(62, 62)
-
-        # 썸네일
-        self.thumb = QLabel(self)
-        self.thumb.setFixedSize(60, 60)
-        self.thumb.setScaledContents(True)
-        self.thumb.setAlignment(Qt.AlignCenter)
-        self.thumb.setStyleSheet("border: 1px solid #D0D0D0; border-radius: 8px; background-color: #EFEFEF;")
-
-        pixmap = QPixmap(file_path)
-        if not pixmap.isNull():
-            self.thumb.setPixmap(pixmap.scaled(60, 60, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        else:
-            self.thumb.setText("❌")
-            self.thumb.setAlignment(Qt.AlignCenter)
-
-        # 제거 버튼 (우상단 오버레이)
-        self.remove_btn = QPushButton("✕", self)
-        self.remove_btn.setStyleSheet(IMAGE_REMOVE_BTN_STYLE)
-        self.remove_btn.setFixedSize(16, 16)
-        self.remove_btn.move(44, 2)
-        self.remove_btn.clicked.connect(lambda: self.remove_requested.emit(self))
-        self.remove_btn.raise_()
 
 
 class ChatWindow(QWidget):
@@ -188,7 +63,7 @@ class ChatWindow(QWidget):
 
         # 리사이즈 상태
         self._resize_active = False
-        self._resize_dir = _DIR_NONE
+        self._resize_dir = DIR_NONE
         self._resize_start_global: QPoint | None = None
         self._resize_start_geom: QRect | None = None
         
@@ -216,9 +91,22 @@ class ChatWindow(QWidget):
 
         self.message_history = []
         
-        self.chat_history = QTextEdit()
-        self.chat_history.setReadOnly(True)
-        self.chat_history.setStyleSheet(CHAT_HISTORY_STYLE)
+        # ── 채팅 스크롤 영역 (개별 말풍선 위젯 방식) ──
+        self.chat_scroll_area = QScrollArea()
+        self.chat_scroll_area.setWidgetResizable(True)
+        self.chat_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.chat_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.chat_scroll_area.setStyleSheet(CHAT_SCROLL_AREA_STYLE)
+
+        self.chat_scroll_content = QWidget()
+        self.chat_scroll_content.setObjectName("chat_scroll_content")
+        self.chat_scroll_layout = QVBoxLayout(self.chat_scroll_content)
+        self.chat_scroll_layout.setContentsMargins(4, 4, 4, 4)
+        self.chat_scroll_layout.setSpacing(2)
+        self.chat_scroll_layout.addStretch()
+
+        self.chat_scroll_area.setWidget(self.chat_scroll_content)
+        self.bubble_widgets: list[QTextBrowser] = []
         
         self.btn_area = QWidget()
         self.btn_layout = QHBoxLayout(self.btn_area)
@@ -295,7 +183,7 @@ class ChatWindow(QWidget):
         bottom_layout.addStretch()
         bottom_layout.addWidget(self.close_btn)
 
-        layout.addWidget(self.chat_history)
+        layout.addWidget(self.chat_scroll_area, 1)
         layout.addWidget(self.btn_area)
         layout.addWidget(self.image_preview_area)
         layout.addWidget(self.input_field)
@@ -309,18 +197,24 @@ class ChatWindow(QWidget):
         self.container.installEventFilter(self)
         self.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
         
-        self.signaler = ChatSignaler()
-        self.signaler.response_received.connect(self.on_response_received)
-        self.signaler.error_occurred.connect(self.on_error_occurred)
-
         self.pending_tool_call_id = None
-        self.session_id = None
-        self.ws_url = "ws://localhost:8000/ws"
-        self.ws_conn = None
-        self._ws_lock = threading.Lock()
+        
+        self.chat_client = ChatClient(ws_url="ws://localhost:8000/ws")
+        self.chat_client.signaler.response_received.connect(self.on_response_received)
+        self.chat_client.signaler.error_occurred.connect(self.on_error_occurred)
+
+        # 스트림 관련 변수
+        self._streaming = False
+        self._current_stream_text = ""
+        self._current_node_name = None
+        self._current_response_index: int | None = None
+
+        # 사고 과정 로그 누적
+        self._thinking_logs: list[str] = []
+        self._thinking_stream_buffer = ""
 
         self.pet_window = pet_window
-        self._start_websocket_thread()
+        self.handler = ChatResponseHandler(self)
 
     def attach_image(self):
         """파일 선택 다이얼로그로 이미지를 첨부합니다."""
@@ -409,17 +303,26 @@ class ChatWindow(QWidget):
 
         # 채팅 히스토리에 사용자 메시지 표시
         display_text = text if text else "(이미지 전송)"
-        formatted_text = display_text.replace('\n', '<br>')
+        formatted_text = display_text
+        formatted_text = display_text
         if images:
-            img_count = len(images)
-            formatted_text += f"<br><span style='color:#888888; font-size:11px;'>📎 이미지 {img_count}장 첨부</span>"
+            for image_uri in images:
+                formatted_text += f"\n\n![이미지]({image_uri})"
 
-        user_html = USER_MSG_FORMAT.format(text=formatted_text)
-        self.message_history.append(user_html)
+        # 마크다운을 HTML로 변환
+        html_content = convert_markdown_to_html(formatted_text)
+        user_html = USER_MSG_FORMAT.format(text=html_content)
+        self._add_bubble(user_html, "user")
 
         thinking_html = PET_MSG_FORMAT.format(text="생각 중...")
-        full_html = "".join(self.message_history) + thinking_html
-        self.chat_history.setHtml(full_html)
+        self._current_response_index = len(self.bubble_widgets)
+        self._add_bubble(thinking_html, "pet")
+        self._current_node_name = None
+        self._streaming = False
+        self._current_stream_text = ""
+        self._thinking_logs = []
+        self._thinking_stream_buffer = ""
+
         self.scrollToBottom()
 
         self.input_field.clear()
@@ -428,82 +331,109 @@ class ChatWindow(QWidget):
         self.attach_btn.setEnabled(False)
 
         payload = {"action": "chat", "message": api_message, "images": images}
-        self._send_ws_message(payload)
-            
-    def scrollToBottom(self):
-        scrollbar = self.chat_history.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
-    
-    def _start_websocket_thread(self):
-        thread = threading.Thread(target=self._websocket_worker, daemon=True)
-        thread.start()
+        self.chat_client.send_message(payload)
 
-    def _websocket_worker(self):
-        from websockets.sync.client import connect
-        try:
-            with connect(self.ws_url) as websocket:
-                with self._ws_lock:
-                    self.ws_conn = websocket
-                
-                # Listen continuously
-                while True:
-                    try:
-                        message = websocket.recv()
-                        data = json.loads(message)
-                        self.signaler.response_received.emit(data)
-                    except Exception as e:
-                        print(f"WebSocket 닫힘 또는 수신 에러: {e}")
-                        break
-        except Exception as e:
-            self.signaler.error_occurred.emit(f"WebSocket 서버 연결 실패: {e}")
-        finally:
-            with self._ws_lock:
-                self.ws_conn = None
+    # ── 말풍선 위젯 헬퍼 ─────────────────────────────────────────
+    def _add_bubble(self, html_content: str, msg_type: str = "pet") -> QTextBrowser:
+        """개별 말풍선 QTextBrowser 위젯을 컨테이너에 담아 추가합니다."""
+        container = QWidget()
+        vbox = QVBoxLayout(container)
+        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.setSpacing(4)
+        vbox.setSizeConstraint(QVBoxLayout.SetFixedSize)
 
-    def _send_ws_message(self, payload: dict):
-        if self.session_id:
-            payload["session_id"] = self.session_id
+        if msg_type != "error":
+            label = QLabel()
+            label.setStyleSheet("color: #888; font-size: 10px; font-weight: bold; margin-bottom: 2px;")
+            if msg_type == "user":
+                label.setText("나")
+                label.setAlignment(Qt.AlignRight)
+            else:
+                label.setText("🐾 펫")
+                label.setAlignment(Qt.AlignLeft)
+            vbox.addWidget(label)
+
+        bubble = QTextBrowser()
+        bubble.setOpenExternalLinks(False)
+        bubble.anchorClicked.connect(self._on_bubble_link_clicked)
+        bubble.setHtml(html_content)
+        bubble.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        bubble.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        bubble.setProperty("msg_type", msg_type)
+        bubble.document().setDocumentMargin(0)
+
+        if msg_type == "user":
+            bubble.setStyleSheet(USER_BUBBLE_STYLE)
+        elif msg_type == "error":
+            bubble.setStyleSheet(ERROR_BUBBLE_STYLE)
+        else:
+            bubble.setStyleSheet(PET_BUBBLE_STYLE)
+
+        # 크기 조절 (너비: 내용 기반, 최대 70% / 높이: 내용 기반, 최대 BUBBLE_MAX_HEIGHT)
+        fit_bubble_size(bubble, self.chat_scroll_area.viewport())
+        vbox.addWidget(bubble)
+
+        # 정렬: 사용자=오른쪽, 펫=왼쪽, 에러=중앙
+        if msg_type == "user":
+            alignment = Qt.AlignRight
+        elif msg_type == "error":
+            alignment = Qt.AlignHCenter
+        else:
+            alignment = Qt.AlignLeft
+
+        # stretch 앞에 컨테이너를 삽입
+        idx = self.chat_scroll_layout.count() - 1
+        self.chat_scroll_layout.insertWidget(idx, container, 0, alignment)
+        self.bubble_widgets.append(bubble)
         
-        def _do_send():
-            with self._ws_lock:
-                if self.ws_conn:
-                    try:
-                        self.ws_conn.send(json.dumps(payload))
-                    except Exception as e:
-                        self.signaler.error_occurred.emit(f"메시지 전송 실패: {e}")
-                else:
-                    self.signaler.error_occurred.emit("서버와 연결되어 있지 않습니다. 다시 실행해주세요.")
+        # 삭제 등의 처리를 위해 컨테이너 참조 저장
+        bubble.setProperty("container_widget", container)
+        
+        return bubble
 
-        threading.Thread(target=_do_send, daemon=True).start()
 
+    def _update_bubble(self, index: int, html_content: str, msg_type: str = "pet"):
+        """기존 말풍선 위젯의 HTML 내용을 업데이트합니다."""
+        if 0 <= index < len(self.bubble_widgets):
+            bubble = self.bubble_widgets[index]
+            bubble.setHtml(html_content)
+            fit_bubble_size(bubble, self.chat_scroll_area.viewport())
+
+    def _flush_thinking_buffer(self):
+        """스트림 버퍼에 쌓인 텍스트를 사고 과정 로그에 추가합니다."""
+        if self._thinking_stream_buffer.strip():
+            self._thinking_logs.append(self._thinking_stream_buffer.strip())
+        self._thinking_stream_buffer = ""
+
+
+    def _on_bubble_link_clicked(self, url: QUrl):
+        """말풍선 내 링크 클릭 처리. 사고과정 토글 또는 외부 링크."""
+        url_str = url.toString()
+        if url_str == "action:toggle_thinking":
+            bubble = self.sender()
+            if bubble is None:
+                return
+            expanded = bubble.property("thinking_expanded") or False
+            expanded = not expanded
+            bubble.setProperty("thinking_expanded", expanded)
+
+            answer_html = bubble.property("answer_html_content") or ""
+            thinking_html = bubble.property("thinking_html_content") or ""
+            new_html = render_thinking_html(answer_html, thinking_html, expanded)
+            bubble.setHtml(new_html)
+
+            # 펼친 상태에서는 높이 제한을 해제 (매우 큰 값으로 설정)
+            max_h = 10000 if expanded else BUBBLE_MAX_HEIGHT
+            fit_bubble_size(bubble, self.chat_scroll_area.viewport(), max_height=max_h)
+            self.scrollToBottom()
+        else:
+            QDesktopServices.openUrl(url)
+
+    def scrollToBottom(self):
+        scroll_to_bottom(self.chat_scroll_area)
     
     def on_response_received(self, data: dict):
-        if self.is_shutting_down:
-            QApplication.instance().quit()
-            return
-
-        # 에이전트가 오류 응답을 반환한 경우 에러로 처리
-        if data.get("status") == "error":
-            self.on_error_occurred(data.get("message", "알 수 없는 오류가 발생했습니다."))
-            return
-
-        reply = data.get("response") or data.get("message") or str(data)
-        formatted_reply = reply.replace('\n', '<br>')
-        
-        pet_html = PET_MSG_FORMAT.format(text=formatted_reply)
-        self.message_history.append(pet_html)
-        
-        self.chat_history.setHtml("".join(self.message_history))
-        self.scrollToBottom()
-        
-        if data.get("session_id"): self.session_id = data["session_id"]
-        self.pending_tool_call_id = data.get("tool_call_id")
-        
-        is_waiting = (data.get("status") == "approval_required")
-        self.btn_area.setVisible(is_waiting)
-        self.input_field.setEnabled(not is_waiting)
-        self.attach_btn.setEnabled(not is_waiting)
-        if not is_waiting: self.input_field.setFocus()
+        self.handler.handle(data)
 
 
     def process_btn(self, choice: str):
@@ -511,12 +441,21 @@ class ChatWindow(QWidget):
         is_approved = (choice == "approved")
         choice_text = "승인" if is_approved else "거절"
         
-        user_msg = USER_MSG_FORMAT.format(text=f"[{choice_text}] 하겠어.")
-        self.message_history.append(user_msg)
-        
+        # 마크다운을 HTML로 변환
+        user_text = f"[{choice_text}] 하겠어."
+        html_user_text = convert_markdown_to_html(user_text)
+        user_msg = USER_MSG_FORMAT.format(text=html_user_text)
+        self._add_bubble(user_msg, "user")
+
         thinking_html = PET_MSG_FORMAT.format(text="결과를 서버에 전달하는 중...")
-        full_html = "".join(self.message_history) + thinking_html
-        self.chat_history.setHtml(full_html)
+        self._current_response_index = len(self.bubble_widgets)
+        self._add_bubble(thinking_html, "pet")
+        self._current_node_name = None
+        self._streaming = False
+        self._current_stream_text = ""
+        self._thinking_logs = []
+        self._thinking_stream_buffer = ""
+
         self.scrollToBottom()
 
         payload = {
@@ -524,32 +463,45 @@ class ChatWindow(QWidget):
             "approve": is_approved,
             "tool_call_id": self.pending_tool_call_id
         }
-        self._send_ws_message(payload)
+        self.chat_client.send_message(payload)
 
     def on_error_occurred(self, error: str):
         safe_error = html.escape(error)
         
-        error_msg = ERROR_MSG_FORMAT.format(text=safe_error)
-        self.message_history.append(error_msg)
-        self.chat_history.setHtml("".join(self.message_history))
+        # 마크다운 변환 (일관성 유지)
+        html_error = convert_markdown_to_html(safe_error)
+        error_msg = ERROR_MSG_FORMAT.format(text=html_error)
+        self._add_bubble(error_msg, "error")
         self.scrollToBottom()
         
         self.input_field.setEnabled(True)
         self.attach_btn.setEnabled(True)
         self.input_field.setFocus()
 
+    # ── 반응형 리사이즈 ──────────────────────────────────────────
+    def resizeEvent(self, event):
+        """창 크기 변경 시 내부 말풍선 및 사고 과정 위젯 크기를 재계산합니다."""
+        super().resizeEvent(event)
+        scroll_w = self.chat_scroll_area.viewport().width()
+        if scroll_w < 50:
+            scroll_w = self.chat_scroll_area.width() - 20
+        max_w = max(int(scroll_w * 0.7), 100)
+
+        # 일반 말풍선 크기 재계산
+        for bubble in self.bubble_widgets:
+            expanded = bubble.property("thinking_expanded") or False
+            max_h = BUBBLE_MAX_HEIGHT * 2 if expanded else BUBBLE_MAX_HEIGHT
+            fit_bubble_size(bubble, self.chat_scroll_area.viewport(), max_height=max_h)
+
     # ── 드래그 이동 ───────────────────────────────────────────
     def _on_drag_started(self, cursor_global: QPoint):
-        """BubbleFrame 드래그 시작 → pet_window에 위임합니다."""
         if self.pet_window:
             self.pet_window.start_drag(cursor_global)
         else:
-            # pet_window가 없을 때 채팅창만 단독 이동
             self._drag_start_cursor_pos = cursor_global
             self._drag_start_window_pos = self.pos()
 
     def _on_drag_moved(self, cursor_global: QPoint):
-        """BubbleFrame 드래그 중 → pet_window에 위임합니다."""
         if self.pet_window:
             if not self.pet_window._drag_active:
                 delta = cursor_global - self.pet_window._drag_start_cursor
@@ -559,15 +511,12 @@ class ChatWindow(QWidget):
             if self.pet_window._drag_active:
                 self.pet_window.do_drag(cursor_global)
         else:
-            if self._drag_start_cursor_pos is None:
-                return
+            if self._drag_start_cursor_pos is None: return
             delta = cursor_global - self._drag_start_cursor_pos
             self.move(self._drag_start_window_pos + delta)
 
     def _on_drag_finished(self):
-        """BubbleFrame 드래그 종료 → pet_window에 위임합니다."""
-        if self.pet_window:
-            self.pet_window.end_drag()
+        if self.pet_window: self.pet_window.end_drag()
         else:
             self._drag_start_cursor_pos = None
             self._drag_start_window_pos = None
@@ -583,56 +532,39 @@ class ChatWindow(QWidget):
 
     def close_program(self):
         self.is_shutting_down = True
-        
-        with self._ws_lock:
-            if hasattr(self, 'ws_conn') and self.ws_conn:
-                try:
-                    self.ws_conn.close()
-                except Exception:
-                    pass
+        self.chat_client.close()
             
         QApplication.instance().quit()
         
         import os
         os._exit(0)
 
-    # ── 리사이즈: 이벤트 필터 (BubbleFrame 위에서도 동작) ─────────────
     def eventFilter(self, obj, event):
-        if obj is not self.container:
-            return super().eventFilter(obj, event)
-
+        if obj is not self.container: return super().eventFilter(obj, event)
         etype = event.type()
-
         if etype == QEvent.Type.MouseMove:
             gpos = event.globalPosition().toPoint()
             if self._resize_active:
                 self._do_resize(gpos)
-                return True                       # 드래그 이동 차단
-            self._update_resize_cursor(self._get_resize_dir(gpos))
-            return False
-
+                return True
+            self._update_resize_cursor(get_resize_dir(self, gpos))
         elif etype == QEvent.Type.MouseButtonPress:
             if event.button() == Qt.LeftButton:
                 gpos = event.globalPosition().toPoint()
-                d = self._get_resize_dir(gpos)
-                if d != _DIR_NONE:
+                d = get_resize_dir(self, gpos)
+                if d != DIR_NONE:
                     self._start_resize(gpos, d)
-                    return True                   # 드래그 시작 차단
-            return False
-
+                    return True
         elif etype == QEvent.Type.MouseButtonRelease:
             if self._resize_active and event.button() == Qt.LeftButton:
                 self._end_resize()
                 return True
-            return False
-
         return super().eventFilter(obj, event)
 
-    # ChatWindow 마진 영역(BubbleFrame 밖)도 리사이즈 처리
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            d = self._get_resize_dir(event.globalPosition().toPoint())
-            if d != _DIR_NONE:
+            d = get_resize_dir(self, event.globalPosition().toPoint())
+            if d != DIR_NONE:
                 self._start_resize(event.globalPosition().toPoint(), d)
                 event.accept()
                 return
@@ -644,7 +576,7 @@ class ChatWindow(QWidget):
             self._do_resize(gpos)
             event.accept()
             return
-        self._update_resize_cursor(self._get_resize_dir(gpos))
+        self._update_resize_cursor(get_resize_dir(self, gpos))
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -654,27 +586,8 @@ class ChatWindow(QWidget):
             return
         super().mouseReleaseEvent(event)
 
-    # ── 리사이즈 헬퍼 ────────────────────────────────────────────────
-    def _get_resize_dir(self, cursor_global: QPoint) -> int:
-        """커서가 창 가장자리 어느 방향에 있는지 비트마스크로 반환합니다."""
-        m = _RESIZE_MARGIN
-        x, y = cursor_global.x(), cursor_global.y()
-        wx, wy = self.x(), self.y()
-        ww, wh = self.width(), self.height()
-
-        d = _DIR_NONE
-        if x <= wx + m:
-            d |= _DIR_LEFT
-        elif x >= wx + ww - m:
-            d |= _DIR_RIGHT
-        if y <= wy + m:
-            d |= _DIR_TOP
-        elif y >= wy + wh - m:
-            d |= _DIR_BOTTOM
-        return d
-
     def _update_resize_cursor(self, d: int):
-        self.setCursor(QCursor(_RESIZE_CURSOR_MAP.get(d, Qt.CursorShape.ArrowCursor)))
+        self.setCursor(QCursor(RESIZE_CURSOR_MAP.get(d, Qt.CursorShape.ArrowCursor)))
 
     def _start_resize(self, cursor_global: QPoint, d: int):
         self._resize_active = True
@@ -683,38 +596,28 @@ class ChatWindow(QWidget):
         self._resize_start_geom = self.geometry()
 
     def _do_resize(self, cursor_global: QPoint):
-        if self._resize_start_global is None:
-            return
+        if self._resize_start_global is None: return
         delta = cursor_global - self._resize_start_global
         g = QRect(self._resize_start_geom)
+        if self._resize_dir & DIR_RIGHT: g.setRight(g.right() + delta.x())
+        if self._resize_dir & DIR_BOTTOM: g.setBottom(g.bottom() + delta.y())
+        if self._resize_dir & DIR_LEFT: g.setLeft(g.left() + delta.x())
+        if self._resize_dir & DIR_TOP: g.setTop(g.top() + delta.y())
 
-        if self._resize_dir & _DIR_RIGHT:
-            g.setRight(g.right() + delta.x())
-        if self._resize_dir & _DIR_BOTTOM:
-            g.setBottom(g.bottom() + delta.y())
-        if self._resize_dir & _DIR_LEFT:
-            g.setLeft(g.left() + delta.x())
-        if self._resize_dir & _DIR_TOP:
-            g.setTop(g.top() + delta.y())
-
-        # 최소 크기 강제
         min_w, min_h = self.minimumWidth(), self.minimumHeight()
         if g.width() < min_w:
-            if self._resize_dir & _DIR_LEFT:
-                g.setLeft(g.right() - min_w)
-            else:
-                g.setRight(g.left() + min_w)
+            if self._resize_dir & DIR_LEFT: g.setLeft(g.right() - min_w)
+            else: g.setRight(g.left() + min_w)
         if g.height() < min_h:
-            if self._resize_dir & _DIR_TOP:
-                g.setTop(g.bottom() - min_h)
-            else:
-                g.setBottom(g.top() + min_h)
+            if self._resize_dir & DIR_TOP: g.setTop(g.bottom() - min_h)
+            else: g.setBottom(g.top() + min_h)
 
         self.setGeometry(g)
-
+        sync_pet_with_bubble(self, self.pet_window)
+    
     def _end_resize(self):
         self._resize_active = False
-        self._resize_dir = _DIR_NONE
+        self._resize_dir = DIR_NONE
         self._resize_start_global = None
         self._resize_start_geom = None
-        self.unsetCursor()
+        self.unsetCursor()

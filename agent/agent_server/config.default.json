@@ -1,36 +1,84 @@
 {
-  "mcp": {
-    "windows_mcp": {
-      "enabled": true,
-      "python_path": ""
+  "mcpServers": {
+    "windows-mcp": {
+      "command": "uvx",
+      "args": [
+        "windows-mcp"
+      ],
+      "transport": "stdio",
+      "env": {
+        "WINDOWS_MCP_SCREENSHOT_SCALE": "0.5",
+        "WINDOWS_MCP_SCREENSHOT_BACKEND": "auto",
+        "WINDOWS_MCP_PROFILE_SNAPSHOT": "false",
+        "ANONYMIZED_TELEMETRY": "true",
+        "WINDOWS_MCP_DEBUG": "false"
+      }
     },
-    "workspace_mcp": {
-      "enabled": true,
-      "exe_path": "",
-      "tools": [
+    "workspace-mcp": {
+      "command": "uvx",
+      "args": [
+        "workspace-mcp",
+        "--tools",
         "gmail",
         "calendar",
         "drive",
         "docs",
         "sheets"
       ],
-      "oauth_callback_port": "8003"
+      "transport": "stdio",
+      "env": {
+        "GOOGLE_OAUTH_CLIENT_ID": "google-oauth-client-id",
+        "GOOGLE_OAUTH_CLIENT_SECRET": "google-oauth-client-secret",
+        "USER_GOOGLE_EMAIL": "your-email@gmail.com",
+        "OAUTHLIB_INSECURE_TRANSPORT": "1",
+        "PORT": "8003",
+        "WORKSPACE_MCP_PORT": "8003",
+        "GOOGLE_OAUTH_REDIRECT_URI": "http://localhost:8003/oauth2callback"
+      }
     },
-    "email_mcp": {
-      "enabled": true,
-      "exe_path": "",
-      "account_name": "default",
-      "full_name": "",
-      "email_address": "",
-      "password": "",
-      "imap_host": "imap.도메인.com",
-      "imap_port": "993",
-      "smtp_host": "smtp.도메인.com",
-      "smtp_port": "465",
-      "enable_attachment_download": "false"
+    "zerolib-email": {
+      "command": "uvx",
+      "args": [
+        "mcp-email-server@latest",
+        "stdio"
+      ],
+      "transport": "stdio",
+      "env": {
+        "MCP_EMAIL_SERVER_ACCOUNT_NAME": "account-name",
+        "MCP_EMAIL_SERVER_FULL_NAME": "full-name",
+        "MCP_EMAIL_SERVER_EMAIL_ADDRESS": "[EMAIL_ADDRESS]",
+        "MCP_EMAIL_SERVER_USER_NAME": "[EMAIL_ADDRESS]",
+        "MCP_EMAIL_SERVER_PASSWORD": "app-password",
+        "MCP_EMAIL_SERVER_IMAP_HOST": "imap.domain.com",
+        "MCP_EMAIL_SERVER_IMAP_PORT": "993",
+        "MCP_EMAIL_SERVER_SMTP_HOST": "smtp.domain.com",
+        "MCP_EMAIL_SERVER_SMTP_PORT": "465",
+        "MCP_EMAIL_SERVER_SMTP_SSL": "true",
+        "MCP_EMAIL_SERVER_SMTP_START_SSL": "false",
+        "MCP_EMAIL_SERVER_ENABLE_ATTACHMENT_DOWNLOAD": "false"
+      }
     },
-    "notion_mcp": {
-      "enabled": true
+    "zerolib-email-naver": {
+      "command": "uvx",
+      "args": [
+        "mcp-email-server@latest",
+        "stdio"
+      ],
+      "transport": "stdio",
+      "env": {
+        "MCP_EMAIL_SERVER_ACCOUNT_NAME": "naver-account",
+        "MCP_EMAIL_SERVER_FULL_NAME": "full-name",
+        "MCP_EMAIL_SERVER_EMAIL_ADDRESS": "your-id@naver.com",
+        "MCP_EMAIL_SERVER_USER_NAME": "your-id@naver.com",
+        "MCP_EMAIL_SERVER_PASSWORD": "naver-app-password",
+        "MCP_EMAIL_SERVER_IMAP_HOST": "imap.naver.com",
+        "MCP_EMAIL_SERVER_IMAP_PORT": "993",
+        "MCP_EMAIL_SERVER_SMTP_HOST": "smtp.naver.com",
+        "MCP_EMAIL_SERVER_SMTP_PORT": "587",
+        "MCP_EMAIL_SERVER_SMTP_SSL": "false",
+        "MCP_EMAIL_SERVER_SMTP_START_SSL": "true",
+        "MCP_EMAIL_SERVER_ENABLE_ATTACHMENT_DOWNLOAD": "true"
+      }
     }
   }
 }
