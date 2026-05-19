@@ -23,6 +23,26 @@ logger = logging.getLogger(__name__)
 _mcp_client = None
 
 
+class _JsonConfigStore:
+    def __init__(self, path: Path):
+        self.path = path
+
+    def _read(self) -> dict:
+        if not self.path.exists():
+            return {}
+        with self.path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def get(self, key: str, default=None):
+        return self._read().get(key, default)
+
+    def save(self, updates: dict) -> None:
+        data = self._read()
+        data.update(updates)
+        with self.path.open("w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+
 async def get_mcp_tools():
     """config.json의 mcpServers 설정을 동적으로 읽어 Tools를 반환합니다."""
     global _mcp_client
@@ -31,7 +51,7 @@ async def get_mcp_tools():
         return await _mcp_client.get_tools()
 
     mcp_config = _load_mcp_servers()
-    final_config = _normalize_mcp_config(mcp_config)
+    final_config = await _normalize_mcp_config(mcp_config)
 
     if not final_config:
         logger.warning("[MCP] 등록된 MCP 서버가 없습니다.")
@@ -63,7 +83,7 @@ def _load_mcp_servers() -> dict:
     return servers
 
 
-def _normalize_mcp_config(mcp_config: dict) -> dict:
+async def _normalize_mcp_config(mcp_config: dict) -> dict:
     final_config = {}
 
     for name, raw_cfg in mcp_config.items():
@@ -80,6 +100,17 @@ def _normalize_mcp_config(mcp_config: dict) -> dict:
             normalized["url"] = url
             if raw_cfg.get("headers"):
                 normalized["headers"] = raw_cfg["headers"]
+            if raw_cfg.get("oauth") == "notion" or raw_cfg.get("oauth") is True:
+                try:
+                    from agent_server.notion_oauth import get_valid_token
+
+                    token = await get_valid_token(_JsonConfigStore(CONFIG_PATH))
+                    headers = dict(normalized.get("headers", {}))
+                    headers["Authorization"] = f"Bearer {token}"
+                    normalized["headers"] = headers
+                except Exception as e:
+                    logger.error("[MCP] %s: Notion OAuth 토큰 발급 실패: %s", name, e)
+                    continue
         else:
             command = raw_cfg.get("command")
             if not command:

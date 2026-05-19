@@ -80,6 +80,11 @@
         "MCP_EMAIL_SERVER_SMTP_START_SSL": "true",
         "MCP_EMAIL_SERVER_ENABLE_ATTACHMENT_DOWNLOAD": "true"
       }
+    },
+    "notion-mcp": {
+      "url": "https://mcp.notion.com/sse",
+      "transport": "sse",
+      "oauth": "notion"
     }
   }
 }
