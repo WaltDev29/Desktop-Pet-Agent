@@ -115,6 +115,6 @@ async def create_agent():
     # ---- 컴파일: 체크포인터 주입 ----
     # MemorySaver → thread_id별 상태를 메모리에 보존
     # 나중에 .env에 DATABASE_URL 추가만 하면 PostgresSaver로 자동 전환됩니다.
-    _agent = workflow.compile(checkpointer=get_checkpointer())
+    _agent = workflow.compile(checkpointer=await get_checkpointer())
     logger.info("[Agent] 그래프 컴파일 완료")
     return _agent

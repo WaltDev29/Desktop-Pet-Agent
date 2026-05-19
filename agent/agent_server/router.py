@@ -194,7 +194,7 @@ async def execute_agent(session_id: str, state=None, command=None):
                 log_payload = LogPayload(status="tool_start", tool_name=tool_name, tool_input=tool_input, message_id=tool_msg_id, session_id=session_id)
                 await broadcast_event(WsMessage(type="log", payload=log_payload))
 
-        final_state = agent.get_state(config)
+        final_state = await agent.aget_state(config)
         if final_state.tasks and len(final_state.tasks) > 0 and final_state.tasks[0].interrupts:
             interrupt_data = final_state.tasks[0].interrupts[0].value
             logger.info(f"[Agent] interrupt 발동: {interrupt_data['tool_name']}")
@@ -243,7 +243,7 @@ async def handle_gateway_chat(payload: ChatPayload):
                 logger.info(f"[GatewayHandler] Received chat. session_id={session_id}")
                 agent = await _get_or_create_agent()
                 config = _make_config(session_id)
-                current_state = agent.get_state(config)
+                current_state = await agent.aget_state(config)
                 existing_images = current_state.values.get("uploaded_images", []) if current_state.values else []
                 
                 state = await _initial_state(payload, session_id, existing_images)
@@ -316,8 +316,9 @@ async def websocket_endpoint(websocket: WebSocket):
                                         await gateway_client.send_message(msg_obj)
                                         agent = await _get_or_create_agent()
                                         config = _make_config(sid)
+                                        agent_state = await agent.aget_state(config)
                                         state = await _initial_state(payload_obj, sid, 
-                                                                   agent.get_state(config).values.get("uploaded_images", []) if agent.get_state(config).values else [])
+                                                                   agent_state.values.get("uploaded_images", []) if agent_state.values else [])
                                         await execute_agent(sid, state=state)
                                     else:
                                         await gateway_client.send_message(msg_obj)
@@ -327,11 +328,12 @@ async def websocket_endpoint(websocket: WebSocket):
                                         err_msg = WsMessage(type="log", payload=LogPayload(status="error", message="❌ 로컬 모드 이미지 불가", session_id=sid))
                                         await local_manager.broadcast(err_msg)
                                     else:
-                                        agent = await _get_or_create_agent()
-                                        config = _make_config(sid)
-                                        state = await _initial_state(payload_obj, sid, 
-                                                                   agent.get_state(config).values.get("uploaded_images", []) if agent.get_state(config).values else [])
-                                        await execute_agent(sid, state=state)
+                                         agent = await _get_or_create_agent()
+                                         config = _make_config(sid)
+                                         agent_state = await agent.aget_state(config)
+                                         state = await _initial_state(payload_obj, sid, 
+                                                                    agent_state.values.get("uploaded_images", []) if agent_state.values else [])
+                                         await execute_agent(sid, state=state)
                             finally:
                                 # 실행 종료 알림 (모든 기기 버튼 활성화용)
                                 ready_msg = WsMessage(type="status", payload={"status": "ready", "session_id": sid})
