@@ -377,6 +377,18 @@
 
                     if (!data) return;
 
+                    // 세션 필터링이 필요한 메시지 유형 정의
+                    const sessionBoundTypes = [
+                        "chat", "approval_request", "approval_response", 
+                        "log", "token", "done", "status", "history_res"
+                    ];
+                    if (sessionBoundTypes.includes(type)) {
+                        if (data.session_id && currentSessionId && 
+                            data.session_id.toLowerCase() !== currentSessionId.toLowerCase()) {
+                            return; // 다른 세션의 메시지이므로 무시
+                        }
+                    }
+
                     // 1. 승인 요청 (approval_request)
                     if (type === "approval_request") {
                         currentMessageDiv = null;
@@ -521,23 +533,18 @@
                     }
                     // 10. 대화 이력 수신
                     else if (type === "history_res") {
-                        if (data.session_id === currentSessionId) {
-                            chatBox.innerHTML = ''; // 초기화
-                            if (data.history && data.history.length > 0) {
-                                data.history.forEach(m => {
-                                    appendMessage(m.message, m.role);
-                                });
-                            } else {
-                                chatBox.innerHTML = '<div class="message agent">이전 대화가 없습니다.</div>';
-                            }
+                        chatBox.innerHTML = ''; // 초기화
+                        if (data.history && data.history.length > 0) {
+                            data.history.forEach(m => {
+                                appendMessage(m.message, m.role);
+                            });
+                        } else {
+                            chatBox.innerHTML = '<div class="message agent">이전 대화가 없습니다.</div>';
                         }
                     }
                     // 11. 에이전트 상태 동기화 (Busy/Ready)
                     else if (type === "status") {
-                        if (data.session_id && currentSessionId && 
-                            data.session_id.toLowerCase() === currentSessionId.toLowerCase()) {
-                            setAgentBusy(data.status === "busy");
-                        }
+                        setAgentBusy(data.status === "busy");
                     }
                 } catch (err) {
                     console.error("[WS Message Error]", err, event.data);
