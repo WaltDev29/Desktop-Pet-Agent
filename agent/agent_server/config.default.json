@@ -3,7 +3,8 @@
     "windows-mcp": {
       "command": "uvx",
       "args": [
-        "windows-mcp"
+        "windows-mcp",
+        "serve"
       ],
       "transport": "stdio",
       "env": {
