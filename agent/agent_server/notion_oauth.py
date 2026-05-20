@@ -14,6 +14,7 @@ import hashlib
 import logging
 import os
 import secrets
+import socket
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -23,8 +24,8 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-CALLBACK_PORT = 9999
-REDIRECT_URI = f"http://localhost:{CALLBACK_PORT}/callback"
+DEFAULT_CALLBACK_PORT = int(os.getenv("NOTION_OAUTH_CALLBACK_PORT", "9999"))
+CALLBACK_TIMEOUT_SECONDS = int(os.getenv("NOTION_OAUTH_CALLBACK_TIMEOUT_SECONDS", "180"))
 NOTION_BASE_URL = "https://mcp.notion.com"
 NOTION_SSE_URL = f"{NOTION_BASE_URL}/sse"
 NOTION_TOKEN_KEY = "notion_oauth"
@@ -61,14 +62,14 @@ def generate_pkce() -> tuple[str, str]:
     return verifier, challenge
 
 
-async def register_client(metadata: dict) -> dict:
+async def register_client(metadata: dict, redirect_uri: str) -> dict:
     registration_endpoint = metadata.get("registration_endpoint")
     if not registration_endpoint:
         raise ValueError("Notion OAuth server does not support dynamic client registration.")
 
     payload = {
         "client_name": "Desktop Pet Agent",
-        "redirect_uris": [REDIRECT_URI],
+        "redirect_uris": [redirect_uri],
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
         "token_endpoint_auth_method": "none",
@@ -89,11 +90,11 @@ def _resource_from_metadata(metadata: dict) -> str:
     return protected.get("resource") or NOTION_BASE_URL
 
 
-def _build_auth_url(metadata: dict, client_id: str, code_challenge: str, state: str) -> str:
+def _build_auth_url(metadata: dict, client_id: str, code_challenge: str, state: str, redirect_uri: str) -> str:
     params = {
         "response_type": "code",
         "client_id": client_id,
-        "redirect_uri": REDIRECT_URI,
+        "redirect_uri": redirect_uri,
         "scope": "openid email profile",
         "state": state,
         "code_challenge": code_challenge,
@@ -104,8 +105,26 @@ def _build_auth_url(metadata: dict, client_id: str, code_challenge: str, state: 
     return f"{metadata['authorization_endpoint']}?{urlencode(params)}"
 
 
-def _wait_for_callback() -> tuple[str, str]:
+def _is_port_available(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind(("localhost", port))
+        except OSError:
+            return False
+    return True
+
+
+def _select_callback_port() -> int:
+    if DEFAULT_CALLBACK_PORT > 0 and _is_port_available(DEFAULT_CALLBACK_PORT):
+        return DEFAULT_CALLBACK_PORT
+    return 0
+
+
+def _create_callback_server() -> tuple[HTTPServer, dict[str, str], str]:
     result: dict[str, str] = {}
+
+    class CallbackServer(HTTPServer):
+        allow_reuse_address = False
 
     class CallbackHandler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -129,12 +148,21 @@ def _wait_for_callback() -> tuple[str, str]:
         def log_message(self, format, *args):
             return
 
-    server = HTTPServer(("localhost", CALLBACK_PORT), CallbackHandler)
+    server = CallbackServer(("localhost", _select_callback_port()), CallbackHandler)
+    server.timeout = CALLBACK_TIMEOUT_SECONDS
+    actual_port = server.server_address[1]
+    redirect_uri = f"http://localhost:{actual_port}/callback"
+    return server, result, redirect_uri
+
+
+def _wait_for_callback(server: HTTPServer, result: dict[str, str]) -> tuple[str, str]:
     try:
         server.handle_request()
     finally:
         server.server_close()
 
+    if not result:
+        raise TimeoutError(f"Notion OAuth callback timed out after {CALLBACK_TIMEOUT_SECONDS}s.")
     if result.get("error"):
         desc = result.get("error_description") or result["error"]
         raise ValueError(f"Notion OAuth failed: {desc}")
@@ -143,11 +171,17 @@ def _wait_for_callback() -> tuple[str, str]:
     return result["code"], result["state"]
 
 
-async def exchange_code_for_token(metadata: dict, client_id: str, code: str, code_verifier: str) -> dict:
+async def exchange_code_for_token(
+    metadata: dict,
+    client_id: str,
+    code: str,
+    code_verifier: str,
+    redirect_uri: str,
+) -> dict:
     payload = {
         "grant_type": "authorization_code",
         "code": code,
-        "redirect_uri": REDIRECT_URI,
+        "redirect_uri": redirect_uri,
         "client_id": client_id,
         "code_verifier": code_verifier,
         "resource": _resource_from_metadata(metadata),
@@ -205,22 +239,28 @@ async def get_valid_token(config_store, *, force_refresh: bool = False) -> str:
         except Exception as exc:
             logger.warning("[Notion OAuth] Refresh failed, starting re-auth: %s", exc)
 
-    credentials = await register_client(metadata)
-    client_id = credentials["client_id"]
-    verifier, challenge = generate_pkce()
-    state = secrets.token_hex(16)
-    auth_url = _build_auth_url(metadata, client_id, challenge, state)
+    server, callback_result, redirect_uri = _create_callback_server()
+    try:
+        credentials = await register_client(metadata, redirect_uri)
+        client_id = credentials["client_id"]
+        verifier, challenge = generate_pkce()
+        state = secrets.token_hex(16)
+        auth_url = _build_auth_url(metadata, client_id, challenge, state, redirect_uri)
 
-    print("\n[Notion OAuth] Complete Notion authorization in the browser.")
-    print(f"If the browser does not open, paste this URL:\n{auth_url}\n")
-    webbrowser.open(auth_url)
+        print("\n[Notion OAuth] Complete Notion authorization in the browser.")
+        print(f"If the browser does not open, paste this URL:\n{auth_url}\n")
+        webbrowser.open(auth_url)
 
-    loop = asyncio.get_running_loop()
-    code, returned_state = await loop.run_in_executor(None, _wait_for_callback)
-    if returned_state != state:
-        raise ValueError("Notion OAuth state mismatch.")
+        loop = asyncio.get_running_loop()
+        code, returned_state = await loop.run_in_executor(None, _wait_for_callback, server, callback_result)
+        if returned_state != state:
+            raise ValueError("Notion OAuth state mismatch.")
 
-    token = await exchange_code_for_token(metadata, client_id, code, verifier)
+        token = await exchange_code_for_token(metadata, client_id, code, verifier, redirect_uri)
+    except Exception:
+        server.server_close()
+        raise
+
     _save_token(config_store, token, client_id, metadata)
     return token["access_token"]
 
