@@ -45,8 +45,9 @@ def create_app() -> FastAPI:
     app = FastAPI(lifespan=lifespan)
 
     # 라우터 등록
-    from .routes import images, ws
+    from .routes import images, ws, history
     app.include_router(images.router)
     app.include_router(ws.router)
+    app.include_router(history.router)
 
     return app

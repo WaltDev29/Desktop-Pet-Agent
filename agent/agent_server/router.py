@@ -80,7 +80,7 @@ def _make_config(session_id: str) -> dict:
     user_id = DEFAULT_UUID
     return {"configurable": {"thread_id": f"{user_id}:{session_id}"}, "recursion_limit": 50}
 
-async def _initial_state(payload: ChatPayload, session_id: str, existing_images: list = None) -> dict:
+async def _initial_state(payload: ChatPayload, session_id: str, existing_images: list = None, is_new_session: bool = False) -> dict:
     from utils.storage import upload_image
     
     if existing_images is None:
@@ -109,8 +109,30 @@ async def _initial_state(payload: ChatPayload, session_id: str, existing_images:
     if total_image_count > 0:
         content += f"\n\n[첨부된 이미지: {total_image_count}장]"
 
+    messages = []
+    if is_new_session:
+        import httpx
+        from langchain_core.messages import AIMessage
+        api_server = os.getenv("API_SERVER", "http://localhost").rstrip("/")
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"{api_server}/api/history/{session_id}", timeout=5.0)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    for item in data.get("history", []):
+                        if item["role"] == "user":
+                            messages.append(HumanMessage(content=item["message"]))
+                        elif item["role"] == "agent":
+                            messages.append(AIMessage(content=item["message"]))
+                    logger.info(f"[InitialState] 게이트웨이에서 {len(messages)}개의 대화 기록을 불러와 초기 상태에 주입했습니다.")
+        except Exception as e:
+            logger.error(f"[InitialState] 게이트웨이 히스토리 로드 실패: {e}")
+
+    # 현재 들어온 메시지를 마지막에 추가
+    messages.append(HumanMessage(content=content))
+
     return {
-        "messages": [HumanMessage(content=content)],
+        "messages": messages,
         "original_request": payload.message,
         "plan": [],
         "current_task": "",
@@ -244,9 +266,10 @@ async def handle_gateway_chat(payload: ChatPayload):
                 agent = await _get_or_create_agent()
                 config = _make_config(session_id)
                 current_state = await agent.aget_state(config)
+                is_new_session = not bool(current_state.values)
                 existing_images = current_state.values.get("uploaded_images", []) if current_state.values else []
                 
-                state = await _initial_state(payload, session_id, existing_images)
+                state = await _initial_state(payload, session_id, existing_images, is_new_session=is_new_session)
                 await execute_agent(session_id, state=state)
             finally:
                 # 상태 동기화: 종료
