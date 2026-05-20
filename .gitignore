@@ -79,6 +79,3 @@ dmypy.json
 
 # MCP Config
 config.json
-
-# User Uploaded Media Files
-**/uploads/
