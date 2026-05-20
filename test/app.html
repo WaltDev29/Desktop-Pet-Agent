@@ -295,7 +295,7 @@
                     currentSessionId = sid;
                     localStorage.setItem('app_session_id', sid);
                     chatBox.innerHTML = '<div class="message agent">세션(' + sid.substring(0, 6) + ')의 대화를 불러오는 중...</div>';
-                    
+
                     // 서버에 대화 이력 요청
                     if (ws && ws.readyState === WebSocket.OPEN) {
                         ws.send(JSON.stringify({
@@ -313,7 +313,7 @@
             currentSessionId = crypto.randomUUID();
             localStorage.setItem('app_session_id', currentSessionId);
             chatBox.innerHTML = '<div class="message agent">새로운 대화 세션이 시작되었습니다.</div>';
-            
+
             // 서버에 세션 생성 알림 (동기화 용도)
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
@@ -381,11 +381,11 @@
 
                     // 세션 필터링이 필요한 메시지 유형 정의
                     const sessionBoundTypes = [
-                        "chat", "approval_request", "approval_response", 
+                        "chat", "approval_request", "approval_response",
                         "log", "token", "done", "status", "history_res"
                     ];
                     if (sessionBoundTypes.includes(type)) {
-                        if (data.session_id && currentSessionId && 
+                        if (data.session_id && currentSessionId &&
                             data.session_id.toLowerCase() !== currentSessionId.toLowerCase()) {
                             return; // 다른 세션의 메시지이므로 무시
                         }
@@ -727,7 +727,7 @@
                 type: "chat",
                 payload: {
                     message_id: msgId,
-                    message: text || "이미지를 분석해줘.",
+                    message: text || "",
                     images: currentImages,
                     session_id: currentSessionId
                 }
