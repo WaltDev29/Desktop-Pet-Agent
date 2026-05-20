@@ -258,7 +258,7 @@
     <script>
         // 모바일 앱은 Agent 서버가 아닌 Gateway 서버(기본 8000포트, docker-compose 기준 80포트)에 직접 연결합니다.
         // 테스트를 위해 기본 유저 UUID인 00000000-0000-0000-0000-000000000000를 사용합니다.
-        const API_URL = "ws://localhost:80/ws/00000000-0000-0000-0000-000000000000";
+        const API_URL = "ws://petagent.aikopo.net/ws/00000000-0000-0000-0000-000000000000";
         const fileInput = document.getElementById('file-input');
         const previewContainer = document.getElementById('image-preview-container');
         const messageInput = document.getElementById('message-input');
@@ -489,9 +489,7 @@
                         thoughtLogDiv = null;
                         finalResponseDiv = null;
                         resetSendButton();
-                        if (data.final_message) {
-                            appendMessage(data.final_message, "agent");
-                        }
+                        // 게이트웨이 DB 보정용으로 final_message가 들어오더라도 화면에 중복 출력하지 않음
                     }
                     // 5. 채팅 메시지 동기화
                     else if (type === "chat") {

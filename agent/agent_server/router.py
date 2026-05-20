@@ -120,10 +120,14 @@ async def _initial_state(payload: ChatPayload, session_id: str, existing_images:
                 if resp.status_code == 200:
                     data = resp.json()
                     for item in data.get("history", []):
+                        msg_text = item.get("message", "").strip()
+                        if not msg_text or msg_text.startswith('{"plan"'):
+                            continue
+                            
                         if item["role"] == "user":
-                            messages.append(HumanMessage(content=item["message"]))
+                            messages.append(HumanMessage(content=msg_text))
                         elif item["role"] == "agent":
-                            messages.append(AIMessage(content=item["message"]))
+                            messages.append(AIMessage(content=msg_text))
                     logger.info(f"[InitialState] 게이트웨이에서 {len(messages)}개의 대화 기록을 불러와 초기 상태에 주입했습니다.")
         except Exception as e:
             logger.error(f"[InitialState] 게이트웨이 히스토리 로드 실패: {e}")
@@ -229,7 +233,13 @@ async def execute_agent(session_id: str, state=None, command=None):
             )
             await broadcast_event(WsMessage(type="approval_request", payload=app_payload))
         else:
-            done_payload = DonePayload(final_message="", session_id=session_id)
+            final_text = ""
+            if final_state.values and "messages" in final_state.values:
+                messages = final_state.values["messages"]
+                if messages and messages[-1].type == "ai":
+                    final_text = messages[-1].content
+                    
+            done_payload = DonePayload(final_message=final_text, message_id=current_msg_id, session_id=session_id)
             await broadcast_event(WsMessage(type="done", payload=done_payload))
 
     except Exception as e:
@@ -354,8 +364,9 @@ async def websocket_endpoint(websocket: WebSocket):
                                         agent = await _get_or_create_agent()
                                         config = _make_config(sid)
                                         agent_state = await agent.aget_state(config)
+                                        is_new_session = not bool(agent_state.values)
                                         state = await _initial_state(payload_obj, sid, 
-                                                                   agent_state.values.get("uploaded_images", []) if agent_state.values else [])
+                                                                   agent_state.values.get("uploaded_images", []) if agent_state.values else [], is_new_session=is_new_session)
                                         await execute_agent(sid, state=state)
                                     else:
                                         await gateway_client.send_message(msg_obj)
@@ -368,8 +379,9 @@ async def websocket_endpoint(websocket: WebSocket):
                                          agent = await _get_or_create_agent()
                                          config = _make_config(sid)
                                          agent_state = await agent.aget_state(config)
+                                         is_new_session = not bool(agent_state.values)
                                          state = await _initial_state(payload_obj, sid, 
-                                                                    agent_state.values.get("uploaded_images", []) if agent_state.values else [])
+                                                                    agent_state.values.get("uploaded_images", []) if agent_state.values else [], is_new_session=is_new_session)
                                          await execute_agent(sid, state=state)
                             finally:
                                 # 실행 종료 알림 (모든 기기 버튼 활성화용)
