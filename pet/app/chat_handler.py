@@ -26,6 +26,7 @@ class ChatResponseHandler:
             self.window._current_node_name = None
             if data.get("session_id"):
                 self.window.chat_client.session_id = data["session_id"]
+                self.window.current_session.session_id = data["session_id"]
             self.window.pending_tool_call_id = data.get("tool_call_id")
             self.window.btn_area.setVisible(True)
             self.window.input_field.setEnabled(False)
@@ -113,6 +114,7 @@ class ChatResponseHandler:
             
             if data.get("session_id"):
                 self.window.chat_client.session_id = data["session_id"]
+                self.window.current_session.session_id = data["session_id"]
             self.window._current_node_name = None
             self.window.input_field.setEnabled(True)
             self.window.attach_btn.setEnabled(True)
@@ -126,6 +128,7 @@ class ChatResponseHandler:
 
         if data.get("session_id"):
             self.window.chat_client.session_id = data["session_id"]
+            self.window.current_session.session_id = data["session_id"]
         self.window.pending_tool_call_id = data.get("tool_call_id")
         
         is_waiting = (status == "approval_required")

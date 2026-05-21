@@ -12,16 +12,25 @@ from PySide6.QtCore import Qt, Signal, QPoint, QTimer, QEvent, QRect, QUrl
 from PySide6.QtGui import QColor, QPixmap, QCursor, QDesktopServices
 
 from app.chat_style import (
-    CHAT_HISTORY_STYLE, 
-    APPROVE_BTN_STYLE, 
-    REJECT_BTN_STYLE, 
-    INPUT_FIELD_STYLE, 
+    CHAT_HISTORY_STYLE,
+    APPROVE_BTN_STYLE,
+    REJECT_BTN_STYLE,
+    INPUT_FIELD_STYLE,
     CLOSE_BTN_STYLE,
     ATTACH_BTN_STYLE,
+    NEW_CHAT_BTN_STYLE,
+    SETTINGS_BTN_STYLE,
     IMAGE_PREVIEW_AREA_STYLE,
     IMAGE_REMOVE_BTN_STYLE,
     WINDOW_WIDTH,
     WINDOW_HEIGHT,
+    SIDEBAR_WIDTH,
+    SIDEBAR_EXPANDED_WINDOW_WIDTH,
+    SIDEBAR_TOGGLE_BTN_STYLE,
+    SIDEBAR_STYLE,
+    SESSION_ITEM_STYLE,
+    SESSION_ITEM_ACTIVE_STYLE,
+    SIDEBAR_NEW_CHAT_BTN_STYLE,
     USER_MSG_FORMAT,
     PET_MSG_FORMAT,
     ERROR_MSG_FORMAT,
@@ -40,6 +49,7 @@ from app.chat_style import (
 
 from app.chat_network import ChatClient
 from app.chat_handler import ChatResponseHandler
+from app.chat_session import ChatSession, BubbleSnapshot, StreamState
 from app.chat_gui import (
     BubbleFrame, ChatInputField, ImagePreviewItem,
     RESIZE_MARGIN, DIR_NONE, DIR_LEFT, DIR_RIGHT, DIR_TOP, DIR_BOTTOM, RESIZE_CURSOR_MAP,
@@ -48,6 +58,7 @@ from app.chat_gui import (
 )
 
 MAX_IMAGES = 3
+SIDEBAR_ANIM_DURATION = 180  # 사이드바 애니메이션 시간(ms)
 
 
 class ChatWindow(QWidget):
@@ -91,6 +102,13 @@ class ChatWindow(QWidget):
 
         self.message_history = []
         
+        # ── 세션 관리 상태 ──────────────────────────────────
+        self._sidebar_expanded = False
+        self._session_item_btns: list[tuple] = []  # (ChatSession, QPushButton)
+        self.sessions: list[ChatSession] = []
+        self.current_session: ChatSession = ChatSession()
+        self.sessions.append(self.current_session)
+
         # ── 채팅 스크롤 영역 (개별 말풍선 위젯 방식) ──
         self.chat_scroll_area = QScrollArea()
         self.chat_scroll_area.setWidgetResizable(True)
@@ -125,6 +143,26 @@ class ChatWindow(QWidget):
         self.btn_layout.addWidget(self.reject_btn)
         self.btn_area.hide()
 
+        # ── 상단 버튼 영역 (토글 + 신규 채팅 / 설정) ─────────────────
+        top_btn_layout = QHBoxLayout()
+        top_btn_layout.setContentsMargins(0, 0, 0, 5)
+
+        self.sidebar_toggle_btn = QPushButton("☰")
+        self.sidebar_toggle_btn.setStyleSheet(SIDEBAR_TOGGLE_BTN_STYLE)
+        self.sidebar_toggle_btn.setToolTip("채팅 목록 열기/닫기")
+        self.sidebar_toggle_btn.clicked.connect(self._toggle_sidebar)
+        
+        self.new_chat_btn = QPushButton("신규 채팅")
+        self.new_chat_btn.setStyleSheet(NEW_CHAT_BTN_STYLE)
+        self.new_chat_btn.clicked.connect(self.start_new_chat)
+        
+        self.settings_btn = QPushButton("⚙️ 설정")
+        self.settings_btn.setStyleSheet(SETTINGS_BTN_STYLE)
+        self.settings_btn.clicked.connect(self.open_settings)
+        
+        top_btn_layout.addWidget(self.sidebar_toggle_btn)
+        top_btn_layout.addStretch()
+
         self.input_field = ChatInputField()
         self.input_field.setPlaceholderText("무엇을 도와드릴까요?")
         self.input_field.setStyleSheet(INPUT_FIELD_STYLE)
@@ -144,58 +182,55 @@ class ChatWindow(QWidget):
 
         self.attached_images: list[ImagePreviewItem] = []
 
-        # ── 투명도 조절 영역 ──────────────────────────────
-        opacity_layout = QHBoxLayout()
-        chat_opacity_label = QLabel("채팅창 투명도:")
-        chat_opacity_label.setStyleSheet(OPACITY_LABEL_STYLE)
-        self.chat_opacity_slider = QSlider(Qt.Horizontal)
-        self.chat_opacity_slider.setRange(0, 100)
-        self.chat_opacity_slider.setValue(100)
-        self.chat_opacity_slider.setStyleSheet(OPACITY_SLIDER_STYLE)
-        self.chat_opacity_slider.valueChanged.connect(self.set_chat_opacity)
-
-        pet_opacity_label = QLabel("펫 투명도:")
-        pet_opacity_label.setStyleSheet(OPACITY_LABEL_STYLE)
-        self.pet_opacity_slider = QSlider(Qt.Horizontal)
-        self.pet_opacity_slider.setRange(0, 100)
-        self.pet_opacity_slider.setValue(100)
-        self.pet_opacity_slider.setStyleSheet(OPACITY_SLIDER_STYLE)
-        self.pet_opacity_slider.valueChanged.connect(self.set_pet_opacity)
-
-        opacity_layout.addWidget(chat_opacity_label)
-        opacity_layout.addWidget(self.chat_opacity_slider)
-        opacity_layout.addWidget(pet_opacity_label)
-        opacity_layout.addWidget(self.pet_opacity_slider)
-
-        # ── 입력 하단 버튼 행 ─────────────────────────────────
-        bottom_layout = QHBoxLayout()
-        self.attach_btn = QPushButton("📎")
+        # ── 입력 영역 ──────────────────────────────────────
+        input_layout = QHBoxLayout()
+        input_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.attach_btn = QPushButton("파일 업로드")
         self.attach_btn.setStyleSheet(ATTACH_BTN_STYLE)
         self.attach_btn.setToolTip("이미지 첨부 (최대 3개)")
-        self.attach_btn.setFixedSize(30, 30)
         self.attach_btn.clicked.connect(self.attach_image)
 
+        input_layout.addWidget(self.attach_btn)
+        input_layout.addWidget(self.input_field)
+
+        # ── 하단 버튼 행 (종료 버튼) ──────────────────────────────────
         self.close_btn = QPushButton("종료")
         self.close_btn.setStyleSheet(CLOSE_BTN_STYLE)
         self.close_btn.clicked.connect(self.close_program)
 
-        bottom_layout.addWidget(self.attach_btn)
-        bottom_layout.addStretch()
-        bottom_layout.addWidget(self.close_btn)
 
-        layout.addWidget(self.chat_scroll_area, 1)
-        layout.addWidget(self.btn_area)
-        layout.addWidget(self.image_preview_area)
-        layout.addWidget(self.input_field)
-        layout.addLayout(opacity_layout)
-        layout.addLayout(bottom_layout)
-        
+        # ── 채팅 영역 위젯 (우측) ────────────────────────────
+        chat_area = QWidget()
+        chat_area_layout = QVBoxLayout(chat_area)
+        chat_area_layout.setContentsMargins(0, 0, 0, 0)
+        chat_area_layout.setSpacing(4)
+        chat_area_layout.addLayout(top_btn_layout)
+        chat_area_layout.addWidget(self.chat_scroll_area, 1)
+        chat_area_layout.addWidget(self.btn_area)
+        chat_area_layout.addWidget(self.image_preview_area)
+        chat_area_layout.addLayout(input_layout)
+
+        # ── 수평 분할: 사이드바(좌) + 채팅 영역(우) ──────────
+        inner_h_layout = QHBoxLayout()
+        inner_h_layout.setContentsMargins(0, 0, 0, 0)
+        inner_h_layout.setSpacing(0)
+
+        self.sidebar_panel = self._build_sidebar()
+        self.sidebar_panel.hide()  # 기본: 접혀 있음
+
+        inner_h_layout.addWidget(self.sidebar_panel)
+        inner_h_layout.addWidget(chat_area, 1)
+
+        layout.addLayout(inner_h_layout)
+
         main_layout.addWidget(self.container)
         self.setMinimumSize(220, 300)
         self.setMouseTracking(True)
         self.container.setMouseTracking(True)
         self.container.installEventFilter(self)
         self.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
+
         
         self.pending_tool_call_id = None
         
@@ -291,6 +326,236 @@ class ChatWindow(QWidget):
         self.image_preview_area.hide()
         self._update_attach_btn_state()
 
+    def start_new_chat(self):
+        """현재 세션을 저장하고 새 채팅 세션을 시작합니다."""
+        # 1. 현재 세션 저장 (말풍선이 하나라도 있을 때만)
+        if self.bubble_widgets:
+            self._save_current_session()
+            self._refresh_sidebar_item(self.current_session)
+
+        # 2. 새 세션 생성
+        new_session = ChatSession()
+        self.sessions.append(new_session)
+        self.current_session = new_session
+
+        # 3. 사이드바에 새 항목 추가
+        self._add_session_item(new_session)
+
+        # 4. 화면 초기화
+        self._clear_bubble_widgets()
+        self._reset_stream_state()
+
+        # 5. 입력창 및 첨부 초기화
+        self.input_field.clear()
+        self._clear_attached_images()
+        self.input_field.setEnabled(True)
+        self._update_attach_btn_state()
+
+        # 6. chat_client session_id 초기화
+        self.chat_client.session_id = None
+
+        # 7. 사이드바 항목 강조 업데이트
+        self._update_session_highlight()
+
+    # ── 사이드바 구성 ────────────────────────────────────────────
+
+    def _build_sidebar(self) -> QWidget:
+        """좌측 세션 목록 사이드바 위젯을 생성합니다."""
+        from PySide6.QtWidgets import QSizePolicy
+
+        panel = QWidget()
+        panel.setObjectName("sidebar_panel")
+        panel.setStyleSheet(SIDEBAR_STYLE)
+        panel.setFixedWidth(SIDEBAR_WIDTH)
+        panel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(8, 12, 8, 12)
+        panel_layout.setSpacing(8)
+
+        # 상단 신규 채팅 버튼
+        panel_layout.addWidget(self.new_chat_btn)
+
+        # 헤더
+        header = QLabel("채팅 목록")
+        header.setObjectName("sidebar_header")
+        panel_layout.addWidget(header)
+
+        # 세션 목록 스크롤 영역
+        self.session_list_scroll = QScrollArea()
+        self.session_list_scroll.setWidgetResizable(True)
+        self.session_list_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.session_list_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.session_list_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollBar:vertical { width: 4px; background: rgba(255,255,255,10); }"
+            "QScrollBar::handle:vertical { background: rgba(255,255,255,80); border-radius: 2px; }"
+        )
+
+        self.session_list_content = QWidget()
+        self.session_list_content.setStyleSheet("background: transparent;")
+        self.session_list_layout = QVBoxLayout(self.session_list_content)
+        self.session_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.session_list_layout.setSpacing(0)
+        self.session_list_layout.addStretch()
+
+        self.session_list_scroll.setWidget(self.session_list_content)
+        panel_layout.addWidget(self.session_list_scroll, 1)
+
+        # 현재 세션 항목 추가 (초기 세션)
+        self._add_session_item(self.current_session)
+        self._update_session_highlight()
+        
+        # 하단 설정 / 종료 버튼 영역
+        panel_bottom_layout = QVBoxLayout()
+        panel_bottom_layout.setSpacing(6)
+        panel_bottom_layout.addWidget(self.settings_btn)
+        panel_bottom_layout.addWidget(self.close_btn)
+        
+        panel_layout.addLayout(panel_bottom_layout)
+
+        return panel
+
+    def _toggle_sidebar(self):
+        """사이드바를 접거나 펼칩니다. 창 너비도 함께 조정합니다."""
+        self._sidebar_expanded = not self._sidebar_expanded
+
+        if self._sidebar_expanded:
+            self.sidebar_panel.show()
+            self.resize(SIDEBAR_EXPANDED_WINDOW_WIDTH, self.height())
+            self.sidebar_toggle_btn.setText("✕")
+            self.sidebar_toggle_btn.setToolTip("채팅 목록 닫기")
+        else:
+            self.sidebar_panel.hide()
+            self.resize(WINDOW_WIDTH, self.height())
+            self.sidebar_toggle_btn.setText("☰")
+            self.sidebar_toggle_btn.setToolTip("채팅 목록 열기/닫기")
+
+        sync_pet_with_bubble(self, self.pet_window)
+
+    # ── 세션 저장/복원 ────────────────────────────────────────────
+
+    def _save_current_session(self):
+        """현재 화면의 말풍선들을 현재 세션에 스냅샷으로 저장합니다."""
+        snapshots = []
+        for bubble in self.bubble_widgets:
+            snap = BubbleSnapshot(
+                html=bubble.toHtml(),
+                msg_type=bubble.property("msg_type") or "pet",
+                answer_html_content=bubble.property("answer_html_content"),
+                thinking_html_content=bubble.property("thinking_html_content"),
+                thinking_expanded=bubble.property("thinking_expanded") or False,
+            )
+            snapshots.append(snap)
+        self.current_session.bubbles = snapshots
+
+        # 스트림 상태도 저장
+        self.current_session.stream_state = StreamState(
+            streaming=self._streaming,
+            current_stream_text=self._current_stream_text,
+            current_node_name=self._current_node_name,
+            current_response_index=self._current_response_index,
+            thinking_logs=list(self._thinking_logs),
+            thinking_stream_buffer=self._thinking_stream_buffer,
+        )
+        self.current_session.pending_tool_call_id = self.pending_tool_call_id
+
+    def _load_session(self, session: ChatSession):
+        """선택된 세션의 말풍선을 화면에 복원합니다."""
+        # 현재 세션 저장
+        if self.bubble_widgets:
+            self._save_current_session()
+
+        # 화면 초기화
+        self._clear_bubble_widgets()
+
+        # 세션 전환
+        self.current_session = session
+        self.chat_client.session_id = session.session_id
+
+        # 스트림 상태 복원
+        ss = session.stream_state
+        self._streaming = ss.streaming
+        self._current_stream_text = ss.current_stream_text
+        self._current_node_name = ss.current_node_name
+        self._current_response_index = ss.current_response_index
+        self._thinking_logs = list(ss.thinking_logs)
+        self._thinking_stream_buffer = ss.thinking_stream_buffer
+        self.pending_tool_call_id = session.pending_tool_call_id
+
+        # 말풍선 복원
+        for snap in session.bubbles:
+            bubble = self._add_bubble(snap.html, snap.msg_type)
+            if snap.answer_html_content is not None:
+                bubble.setProperty("answer_html_content", snap.answer_html_content)
+                bubble.setProperty("thinking_html_content", snap.thinking_html_content)
+                bubble.setProperty("thinking_expanded", snap.thinking_expanded)
+
+        self.scrollToBottom()
+        self._update_session_highlight()
+
+    # ── 사이드바 항목 관리 ─────────────────────────────────────────
+
+    def _add_session_item(self, session: ChatSession):
+        """사이드바 목록에 세션 항목 버튼을 추가합니다."""
+        btn = QPushButton(f"💬 {session.title}")
+        btn.setStyleSheet(SESSION_ITEM_STYLE)
+        btn.setToolTip(session.title)
+        btn.clicked.connect(lambda checked=False, s=session: self._on_session_clicked(s))
+
+        # stretch 앞에 삽입
+        idx = self.session_list_layout.count() - 1
+        self.session_list_layout.insertWidget(idx, btn)
+
+        self._session_item_btns.append((session, btn))
+
+    def _refresh_sidebar_item(self, session: ChatSession):
+        """사이드바에서 해당 세션의 버튼 텍스트를 업데이트합니다."""
+        for s, btn in self._session_item_btns:
+            if s is session:
+                btn.setText(f"💬 {session.title}")
+                btn.setToolTip(session.title)
+                break
+
+    def _update_session_highlight(self):
+        """현재 활성 세션 항목만 강조 스타일로 표시합니다."""
+        for s, btn in self._session_item_btns:
+            if s is self.current_session:
+                btn.setStyleSheet(SESSION_ITEM_ACTIVE_STYLE)
+            else:
+                btn.setStyleSheet(SESSION_ITEM_STYLE)
+
+    def _on_session_clicked(self, session: ChatSession):
+        """사이드바 세션 항목 클릭 시 해당 세션으로 전환합니다."""
+        if session is self.current_session:
+            return
+        self._load_session(session)
+
+    # ── 내부 헬퍼 ─────────────────────────────────────────────────
+
+    def _clear_bubble_widgets(self):
+        """현재 화면의 말풍선 위젯을 모두 제거합니다."""
+        for bubble in self.bubble_widgets:
+            container = bubble.property("container_widget")
+            if container:
+                self.chat_scroll_layout.removeWidget(container)
+                container.deleteLater()
+            else:
+                self.chat_scroll_layout.removeWidget(bubble)
+                bubble.deleteLater()
+        self.bubble_widgets.clear()
+
+    def _reset_stream_state(self):
+        """스트림 관련 상태를 초기화합니다."""
+        self._streaming = False
+        self._current_stream_text = ""
+        self._current_node_name = None
+        self._current_response_index = None
+        self._thinking_logs.clear()
+        self._thinking_stream_buffer = ""
+
+
+
     def send_message(self):
         text = self.input_field.toPlainText().strip()
         images = self._encode_images()
@@ -313,6 +578,12 @@ class ChatWindow(QWidget):
         html_content = convert_markdown_to_html(formatted_text)
         user_html = USER_MSG_FORMAT.format(text=html_content)
         self._add_bubble(user_html, "user")
+
+        # 첫 메시지로 세션 제목 업데이트
+        self.current_session.update_title_from_message(display_text)
+        self._refresh_sidebar_item(self.current_session)
+        self._update_session_highlight()
+
 
         thinking_html = PET_MSG_FORMAT.format(text="생각 중...")
         self._current_response_index = len(self.bubble_widgets)
@@ -521,14 +792,14 @@ class ChatWindow(QWidget):
             self._drag_start_cursor_pos = None
             self._drag_start_window_pos = None
 
-    def set_chat_opacity(self, value):
-        opacity = value / 100.0
-        self.setWindowOpacity(opacity)
-
-    def set_pet_opacity(self, value):
-        if self.pet_window:
-            opacity = value / 100.0
-            self.pet_window.setWindowOpacity(opacity)
+    def open_settings(self):
+        if not hasattr(self, 'settings_window') or not self.settings_window.isVisible():
+            from app.settings_window import SettingsWindow
+            self.settings_window = SettingsWindow(self, self.pet_window)
+            self.settings_window.show()
+        else:
+            self.settings_window.raise_()
+            self.settings_window.activateWindow()
 
     def close_program(self):
         self.is_shutting_down = True
