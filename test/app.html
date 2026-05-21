@@ -536,7 +536,7 @@
                         chatBox.innerHTML = ''; // 초기화
                         if (data.history && data.history.length > 0) {
                             data.history.forEach(m => {
-                                appendMessage(m.message, m.role);
+                                appendMessage(m.message, m.role, m.images || []);
                             });
                         } else {
                             chatBox.innerHTML = '<div class="message agent">이전 대화가 없습니다.</div>';
