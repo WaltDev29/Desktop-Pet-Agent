@@ -256,7 +256,9 @@
     </div>
 
     <script>
-        const API_URL = "ws://localhost:8001/ws";
+        // 모바일 앱은 Agent 서버가 아닌 Gateway 서버(기본 8000포트, docker-compose 기준 80포트)에 직접 연결합니다.
+        // 테스트를 위해 기본 유저 UUID인 00000000-0000-0000-0000-000000000000를 사용합니다.
+        const API_URL = "ws://petagent.aikopo.net/ws/00000000-0000-0000-0000-000000000000";
         const fileInput = document.getElementById('file-input');
         const previewContainer = document.getElementById('image-preview-container');
         const messageInput = document.getElementById('message-input');
@@ -264,8 +266,8 @@
         const sendBtn = document.getElementById('send-btn');
 
         let selectedImages = []; // base64 strings
-        let currentSessionId = localStorage.getItem('agent_session_id');
-        let sessionList = JSON.parse(localStorage.getItem('agent_sessions_list') || "[]");
+        let currentSessionId = localStorage.getItem('app_session_id');
+        let sessionList = JSON.parse(localStorage.getItem('app_sessions_list') || "[]");
         let ws = null;
         let currentMessageDiv = null;
         let thoughtLogDiv = null;
@@ -276,7 +278,7 @@
             if (currentSessionId && !sessionList.includes(currentSessionId)) {
                 sessionList.push(currentSessionId);
             }
-            localStorage.setItem('agent_sessions_list', JSON.stringify(sessionList));
+            localStorage.setItem('app_sessions_list', JSON.stringify(sessionList));
             renderSessionList();
         }
 
@@ -291,7 +293,7 @@
                 btn.style.backgroundColor = (sid === currentSessionId) ? "#4a90e2" : "#444";
                 btn.onclick = () => {
                     currentSessionId = sid;
-                    localStorage.setItem('agent_session_id', sid);
+                    localStorage.setItem('app_session_id', sid);
                     chatBox.innerHTML = '<div class="message agent">세션(' + sid.substring(0, 6) + ')의 대화를 불러오는 중...</div>';
 
                     // 서버에 대화 이력 요청
@@ -308,25 +310,18 @@
         }
 
         function createNewSession() {
-            const newSid = crypto.randomUUID();
-            currentSessionId = newSid;
-            localStorage.setItem('agent_session_id', currentSessionId);
-
-            // 1. 낙관적 UI 업데이트 (목록에 즉시 추가)
-            if (!sessionList.includes(newSid)) {
-                sessionList.unshift(newSid);
-                localStorage.setItem('agent_sessions_list', JSON.stringify(sessionList));
-                renderSessionList();
-            }
-
+            currentSessionId = crypto.randomUUID();
+            localStorage.setItem('app_session_id', currentSessionId);
             chatBox.innerHTML = '<div class="message agent">새로운 대화 세션이 시작되었습니다.</div>';
 
-            // 2. 서버에 알림
+            // 서버에 세션 생성 알림 (동기화 용도)
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                     type: "session_created",
                     payload: { session_id: currentSessionId }
                 }));
+            } else {
+                updateSessionStorage();
             }
         }
 
@@ -338,7 +333,7 @@
 
             // 1. 낙관적 UI 업데이트
             sessionList = sessionList.filter(s => s !== sidToDelete);
-            localStorage.setItem('agent_sessions_list', JSON.stringify(sessionList));
+            localStorage.setItem('app_sessions_list', JSON.stringify(sessionList));
             updateAfterDeletion();
 
             // 2. 서버에 삭제 요청 전송
@@ -353,8 +348,8 @@
         function updateAfterDeletion() {
             chatBox.innerHTML = '<div class="message agent">진행 중이던 세션이 완전히 폐기되었습니다. 우측 상단에서 새 대화를 시작해주세요.</div>';
             currentSessionId = sessionList.length > 0 ? sessionList[sessionList.length - 1] : null;
-            if (currentSessionId) localStorage.setItem('agent_session_id', currentSessionId);
-            else localStorage.removeItem('agent_session_id');
+            if (currentSessionId) localStorage.setItem('app_session_id', currentSessionId);
+            else localStorage.removeItem('app_session_id');
             renderSessionList();
         }
 
@@ -364,7 +359,14 @@
             ws = new WebSocket(API_URL);
 
             ws.onopen = () => {
-                appendMessage("서버와 연결되었습니다. 🟢", "agent");
+                appendMessage("게이트웨이 서버와 연결되었습니다. 🟢", "agent");
+                ws.send(JSON.stringify({
+                    type: "register",
+                    payload: {
+                        role: "app",
+                        client_id: "test_app_1"
+                    }
+                }));
             };
 
             ws.onmessage = (event) => {
@@ -489,7 +491,7 @@
                         resetSendButton();
                         // 게이트웨이 DB 보정용으로 final_message가 들어오더라도 화면에 중복 출력하지 않음
                     }
-                    // 5. 채팅 메시지 동기화 (chat)
+                    // 5. 채팅 메시지 동기화
                     else if (type === "chat") {
                         const msgId = data.message_id;
                         if (window.sentMessageIds && window.sentMessageIds.has(msgId)) return;
@@ -502,10 +504,10 @@
                     // 7. 세션 초기 동기화
                     else if (type === "session_sync") {
                         sessionList = data.sessions;
-                        localStorage.setItem('agent_sessions_list', JSON.stringify(sessionList));
+                        localStorage.setItem('app_sessions_list', JSON.stringify(sessionList));
                         if (currentSessionId && !sessionList.includes(currentSessionId)) {
                             currentSessionId = sessionList.length > 0 ? sessionList[0] : null;
-                            if (currentSessionId) localStorage.setItem('agent_session_id', currentSessionId);
+                            if (currentSessionId) localStorage.setItem('app_session_id', currentSessionId);
                         }
                         renderSessionList();
                     }
@@ -514,7 +516,7 @@
                         const sid = data.session_id;
                         if (!sessionList.includes(sid)) {
                             sessionList.unshift(sid);
-                            localStorage.setItem('agent_sessions_list', JSON.stringify(sessionList));
+                            localStorage.setItem('app_sessions_list', JSON.stringify(sessionList));
                             renderSessionList();
                         }
                     }
@@ -522,7 +524,7 @@
                     else if (type === "session_deleted") {
                         const sid = data.session_id;
                         sessionList = sessionList.filter(s => s !== sid);
-                        localStorage.setItem('agent_sessions_list', JSON.stringify(sessionList));
+                        localStorage.setItem('app_sessions_list', JSON.stringify(sessionList));
                         if (currentSessionId === sid) {
                             updateAfterDeletion();
                         } else {
@@ -694,18 +696,18 @@
             const text = messageInput.value.trim();
             if (!text && selectedImages.length === 0) return;
 
-            // session_id 필수 체크 및 자동 생성
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                appendMessage("서버와 연결되어 있지 않습니다.", "agent");
+                return;
+            }
+
+            // session_id가 없으면 게이트웨이가 메시지를 무시하므로, 발송 전 세션 생성
             if (!currentSessionId) {
                 createNewSession();
             }
 
             // [추가] 전송 즉시 로컬 UI 잠금 (낙관적 락)
             setAgentBusy(true);
-
-            if (!ws || ws.readyState !== WebSocket.OPEN) {
-                appendMessage("서버와 연결되어 있지 않습니다.", "agent");
-                return;
-            }
 
             // UI 업데이트
             appendMessage(text || "이미지 전송", "user", selectedImages);
