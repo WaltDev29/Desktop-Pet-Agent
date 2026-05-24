@@ -197,11 +197,22 @@ def _get_plain_chat_history(messages: list) -> list:
 
 async def _build_worker_messages(state: AgentState, system_prompt: str, include_images: bool = False) -> list:
     """Worker LLM에 전달할 메시지 목록을 구성합니다."""
+    # 전체 대화 이력에서 실행했던 도구 호출 기록(이름과 인자)만 가볍게 추출
+    # (결과값을 제외하여 토큰을 절약하고, Worker가 과거 작업 내역을 인지해 중복 호출을 막음)
+    executed_tools = []
+    for msg in state.get("messages", []):
+        if getattr(msg, "tool_calls", None):
+            for tc in msg.tool_calls:
+                executed_tools.append(f"- {tc.get('name')} with args: {tc.get('args')}")
+    
+    executed_tools_summary = "\n".join(executed_tools) if executed_tools else "None"
+
     msgs = [
         SystemMessage(content=system_prompt),
         HumanMessage(content=(
             f"Sub-task: {state.get('current_task', '')}\n"
-            f"Past Results: {state.get('past_results', [])}"
+            f"Past Results: {state.get('past_results', [])}\n\n"
+            f"[Previously Executed Tools in this session]\n{executed_tools_summary}"
         )),
     ]
 
