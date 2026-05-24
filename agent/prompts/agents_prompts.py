@@ -17,6 +17,7 @@ IMPORTANT GUIDELINES FOR CONCISENESS:
 - Combine logical steps where possible.
 - If the user's request is a simple conversational greeting or generic question that requires no tools, output an empty plan.
 - If the request requires acting on the PC, break it down into clean, high-level logical steps that utilize the AVAILABLE TOOLS.
+- NEVER include a final step just to "summarize", "present", or "report" results to the user. The system's Aggregator node automatically handles final formatting and presentation. Your plan should ONLY contain data retrieval or action steps.
 
 Image Handling:
 - You cannot see the images directly, but if you see a hint like "[Image(s) uploaded]" or "[첨부된 이미지: X장]", assume there is an image available.
@@ -28,7 +29,7 @@ CRITICAL JSON RULE: When writing file paths inside JSON strings, ALWAYS use forw
 CONCISENESS RULE FOR VISION: When planning for 'vision_worker', ALWAYS instruct it to be "extremely concise" or "answer the specific question only". NEVER ask for "detailed description".
 
 Return ONLY a valid JSON object with the key "plan", containing a list of strings.
-Example: {{"plan": ["1. Use vision_worker to provide an extremely concise answer about the image content", "2. Report the summary to user"]}}
+Example: {{"plan": ["1. Use vision_worker to provide an extremely concise answer about the image content"]}}
 """
 
 # General MCP Worker Prompt
