@@ -365,6 +365,12 @@
 
             ws.onopen = () => {
                 appendMessage("서버와 연결되었습니다. 🟢", "agent");
+                ws.send(JSON.stringify({
+                    type: "register",
+                    payload: {
+                        role: "desktop"
+                    }
+                }));
             };
 
             ws.onmessage = (event) => {

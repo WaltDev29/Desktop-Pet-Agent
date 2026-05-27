@@ -19,7 +19,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from entity import (
         WsMessage, TokenPayload, LogPayload, ApprovalRequestPayload, DonePayload,
-        ChatPayload, ApprovalResponsePayload
+        ChatPayload, ApprovalResponsePayload, AgentRegisterPayload
     )
 except ImportError:
     pass
@@ -61,6 +61,9 @@ async def _get_or_create_agent():
         from graph import create_agent
         _agent = await create_agent()
     return _agent
+
+# 세션 리스트 캐싱 (Gateway에서 받은 최신 상태 유지)
+cached_sessions = []
 
 # 세션별 실행 락 (순차 처리를 보장)
 session_locks = {}
@@ -300,8 +303,19 @@ async def handle_gateway_approve(payload: ApprovalResponsePayload):
 
 async def handle_gateway_sync(msg_type: str, payload: dict):
     """게이트웨이로부터 받은 세션 동기화 이벤트를 로컬 UI로 전달합니다."""
+    global cached_sessions
     logger.info(f"[GatewayHandler] Received sync event: {msg_type}")
     
+    if msg_type == "session_sync":
+        cached_sessions = payload.get("sessions", [])
+    elif msg_type == "session_created":
+        session_id = payload.get("session_id")
+        if session_id and session_id not in cached_sessions:
+            cached_sessions.insert(0, session_id)
+    elif msg_type == "session_deleted":
+        session_id = payload.get("session_id")
+        if session_id in cached_sessions:
+            cached_sessions.remove(session_id)
 
     # WsMessage(type=msg_type, payload=payload)를 생성하여 브로드캐스트
     # entity.py의 WsMessage 규격을 따르되 payload는 raw dict를 허용함
@@ -401,9 +415,11 @@ async def websocket_endpoint(websocket: WebSocket):
                         logger.warning(f"[WebSocket] Cannot forward {msg.type}: Local mode active")
                 
                 elif msg.type == "register":
-                    # 데스크탑 UI가 세션 정보를 보내며 등록하는 경우 (필요 시 처리)
-                    pass
-                    
+                    # 데스크탑 UI가 세션 정보를 보내며 등록하는 경우
+                    if not gateway_client.is_local_mode:
+                        logger.info("[WebSocket] 로컬 UI 연결됨. 자체 캐시된 session_sync를 전송합니다.")
+                        sync_payload = {"sessions": cached_sessions}
+                        await websocket.send_text(WsMessage(type="session_sync", payload=sync_payload).model_dump_json())
             except Exception as e:
                 logger.error(f"[WebSocket] 메시지 처리 오류: {e}")
 
