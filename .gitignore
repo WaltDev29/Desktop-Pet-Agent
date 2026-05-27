@@ -79,3 +79,6 @@ dmypy.json
 
 # MCP Config
 config.json
+
+# AntiGravity IDE Agent Rules
+.agents/rules/

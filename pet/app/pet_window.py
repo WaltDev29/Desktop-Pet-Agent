@@ -1,7 +1,7 @@
 import random
 from PySide6.QtWidgets import QWidget, QLabel, QApplication
 from PySide6.QtCore import Qt, QTimer, QPoint
-from PySide6.QtGui import QMovie
+from PySide6.QtGui import QMovie, QPainter
 
 from app.chat_window import ChatWindow
 from app.pet_style import (
@@ -16,6 +16,33 @@ from app.pet_style import (
     MOVEMENT_Y_MAX_RATIO
 )
 
+class DirectionalPetLabel(QLabel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.movie = None
+        self.h_flip = False
+
+    def setMovie(self, movie):
+        self.movie = movie
+        if self.movie:
+            self.movie.frameChanged.connect(self.update)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        if self.movie:
+            pixmap = self.movie.currentPixmap()
+            if not pixmap.isNull():
+                painter.save()
+                if self.h_flip:
+                    # 가로축 기준 반전 (오른쪽 이동 시 반전)
+                    painter.scale(-1, 1)
+                    painter.translate(-self.width(), 0)
+                # 라벨 위젯의 사각형 영역 크기에 픽스맵을 맞추어 그림
+                painter.drawPixmap(self.rect(), pixmap)
+                painter.restore()
+                return
+        super().paintEvent(event)
+
 class PetWindow(QWidget):
     def __init__(self):
         super().__init__()
@@ -24,7 +51,7 @@ class PetWindow(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground) 
         self.resize(PET_WIDTH, PET_HEIGHT) 
 
-        self.pet_label = QLabel(self)
+        self.pet_label = DirectionalPetLabel(self)
         self.pet_label.setAttribute(Qt.WA_TransparentForMouseEvents) 
         self.pet_label.setGeometry(0, 0, PET_WIDTH, PET_HEIGHT) 
         self.pet_label.setAlignment(Qt.AlignCenter)  
@@ -51,6 +78,8 @@ class PetWindow(QWidget):
         self.timer.start(16)
 
         self.x_speed, self.y_speed = 0.5, 0.5
+        # 초기 방향 설정 (오른쪽으로 이동하므로 우로 반전)
+        self.pet_label.h_flip = True
         self.change_dir_timer = 0
         self.is_interacting = False
         self.is_paused = False          # 우클릭으로 멈춤 여부
@@ -83,6 +112,12 @@ class PetWindow(QWidget):
         self.curr_x = max(self.min_x, min(self.curr_x, self.max_x))
         self.curr_y = max(self.min_y, min(self.curr_y, self.max_y))
         self.move(int(self.curr_x), int(self.curr_y))
+
+        # 이동 방향에 맞춰 좌우 반전 상태 설정
+        if self.x_speed > 0:
+            self.pet_label.h_flip = True
+        elif self.x_speed < 0:
+            self.pet_label.h_flip = False
 
     # ── 마우스 이벤트 (클릭 vs 드래그 구분) ────────────────────
     def mousePressEvent(self, event):

@@ -1,7 +1,7 @@
 import json
 import html
 from PySide6.QtWidgets import QApplication
-from app.chat_style import PET_MSG_FORMAT, convert_markdown_to_html
+from app.chat_style import PET_MSG_FORMAT, USER_MSG_FORMAT, convert_markdown_to_html
 from app.chat_gui import fit_bubble_size, render_thinking_html
 
 class ChatResponseHandler:
@@ -13,126 +13,221 @@ class ChatResponseHandler:
             QApplication.instance().quit()
             return
             
-
-        status = data.get("status")
-
-        if status == "error":
-            self.window.on_error_occurred(data.get("message", "알 수 없는 오류가 발생했습니다."))
+        msg_type = data.get("type")
+        payload = data.get("payload")
+        
+        if not payload:
             return
-
-        elif status == "approval_required":
+            
+        # Session filtering (skip if not current session)
+        session_bound_types = ["chat", "approval_request", "approval_response", "log", "token", "done", "status", "history_res"]
+        if msg_type in session_bound_types:
+            msg_session_id = payload.get("session_id")
+            if msg_session_id and self.window.current_session.session_id and msg_session_id.lower() != self.window.current_session.session_id.lower():
+                return
+                
+        if msg_type == "approval_request":
             self.window._streaming = False
             self.window._current_stream_text = ""
             self.window._current_node_name = None
-            if data.get("session_id"):
-                self.window.chat_client.session_id = data["session_id"]
-                self.window.current_session.session_id = data["session_id"]
-            self.window.pending_tool_call_id = data.get("tool_call_id")
+            self.window.pending_tool_call_id = payload.get("tool_call_id")
             self.window.btn_area.setVisible(True)
             self.window.input_field.setEnabled(False)
             self.window.attach_btn.setEnabled(False)
-            return
-
-        elif status == "node_start":
-            node_name = data.get("node", "")
-            self.window._current_node_name = node_name
-            self.window._flush_thinking_buffer()
-            if self.window._current_response_index is not None:
+            
+            # Show approval message bubble
+            message_text = payload.get("message", "승인이 필요합니다.")
+            self.window._add_bubble(PET_MSG_FORMAT.format(text=f"⚠️ 승인 필요: {message_text}"), "pet")
+            self.window.scrollToBottom()
+            
+        elif msg_type == "log":
+            status = payload.get("status")
+            if not status:
+                return
+                
+            if status == "error":
+                self.window.on_error_occurred(payload.get("message", "알 수 없는 오류가 발생했습니다."))
+                
+            elif status == "info":
+                msg = payload.get("message", "")
+                self.window._add_bubble(PET_MSG_FORMAT.format(text=f"ℹ️ 안내: {msg}"), "pet")
+                self.window.scrollToBottom()
+                
+            elif status == "node_start":
+                node_name = payload.get("node", "")
+                self.window._current_node_name = node_name
+                self.window._flush_thinking_buffer()
+                
+                if self.window._current_response_index is None:
+                    self.window._current_response_index = len(self.window.bubble_widgets)
+                    self.window._add_bubble(PET_MSG_FORMAT.format(text="생각 중..."), "pet")
+                    
                 if node_name == "aggregator":
                     self.window._update_bubble(self.window._current_response_index, PET_MSG_FORMAT.format(text="답변 생성 중..."))
                 else:
                     self.window._thinking_logs.append(f"[⚙️ {node_name} 동작 중...]")
                     self.window._update_bubble(self.window._current_response_index, PET_MSG_FORMAT.format(text="생각 중..."))
                 self.window.scrollToBottom()
-            return
-
-        elif status == "tool_start":
-            self.window._flush_thinking_buffer()
-            tool_name = data.get("tool_name", "unknown")
-            tool_input = data.get("tool_input", "")
-            tool_input_str = json.dumps(tool_input, ensure_ascii=False) if isinstance(tool_input, dict) else str(tool_input) if tool_input else ""
-            log_entry = f"[🛠️ 도구 호출: {tool_name}]"
-            if tool_input_str: log_entry += f" 파라미터: {tool_input_str}"
-            self.window._thinking_logs.append(log_entry)
-            if self.window._current_response_index is not None:
+                
+            elif status == "tool_start":
+                self.window._flush_thinking_buffer()
+                tool_name = payload.get("tool_name", "unknown")
+                tool_input = payload.get("tool_input", "")
+                tool_input_str = json.dumps(tool_input, ensure_ascii=False) if isinstance(tool_input, dict) else str(tool_input) if tool_input else ""
+                log_entry = f"[🛠️ 도구 호출: {tool_name}]"
+                if tool_input_str: log_entry += f" 파라미터: {tool_input_str}"
+                
+                if self.window._current_response_index is None:
+                    self.window._current_response_index = len(self.window.bubble_widgets)
+                    self.window._add_bubble(PET_MSG_FORMAT.format(text="도구 실행 중..."), "pet")
+                    
+                self.window._thinking_logs.append(log_entry)
                 self.window._update_bubble(self.window._current_response_index, PET_MSG_FORMAT.format(text="도구 실행 중..."))
                 self.window.scrollToBottom()
-            return
-
-        elif status == "stream_chunk":
-            chunk = data.get("chunk", "")
+                
+        elif msg_type == "token":
+            chunk = payload.get("chunk", "")
+            if self.window._current_response_index is None:
+                self.window._current_response_index = len(self.window.bubble_widgets)
+                self.window._add_bubble(PET_MSG_FORMAT.format(text="..."), "pet")
+                
             if self.window._current_node_name == "aggregator":
                 if not self.window._streaming:
                     self.window._streaming = True
                     self.window._current_stream_text = ""
                 self.window._current_stream_text += chunk
-                if self.window._current_response_index is not None:
-                    html_reply = convert_markdown_to_html(self.window._current_stream_text)
-                    self.window._update_bubble(self.window._current_response_index, PET_MSG_FORMAT.format(text=html_reply))
-                    self.window.scrollToBottom()
+                html_reply = convert_markdown_to_html(self.window._current_stream_text)
+                self.window._update_bubble(self.window._current_response_index, PET_MSG_FORMAT.format(text=html_reply))
             else:
                 self.window._thinking_stream_buffer += chunk
-                if self.window._current_response_index is not None:
-                    self.window._update_bubble(self.window._current_response_index, PET_MSG_FORMAT.format(text="생각 중..."))
-                    self.window.scrollToBottom()
-            return
-
-        elif status in ("stream_end", "success"):
-            if self.window._current_node_name == "aggregator":
-                self.window._flush_thinking_buffer()
-                if self.window._streaming:
-                    self.window._streaming = False
-                    formatted_reply = self.window._current_stream_text
-                else:
-                    reply = data.get("response") or data.get("message") or ""
-                    formatted_reply = reply if reply else "생각 중..."
-
-                html_reply = convert_markdown_to_html(formatted_reply)
-
-                if self.window._thinking_logs and self.window._current_response_index is not None:
+                self.window._update_bubble(self.window._current_response_index, PET_MSG_FORMAT.format(text="생각 중..."))
+            self.window.scrollToBottom()
+            
+        elif msg_type == "done":
+            self.window._flush_thinking_buffer()
+            if self.window._current_node_name == "aggregator" and self.window._streaming:
+                formatted_reply = self.window._current_stream_text
+            else:
+                formatted_reply = payload.get("message") or "처리 완료."
+                
+            html_reply = convert_markdown_to_html(formatted_reply)
+            
+            if self.window._current_response_index is not None:
+                if self.window._thinking_logs:
                     thinking_content = "\n".join(self.window._thinking_logs)
                     thinking_html = convert_markdown_to_html(thinking_content)
                     full_html = render_thinking_html(html_reply, thinking_html, expanded=False)
+                    
                     bubble = self.window.bubble_widgets[self.window._current_response_index]
                     bubble.setProperty("answer_html_content", html_reply)
                     bubble.setProperty("thinking_html_content", thinking_html)
                     bubble.setProperty("thinking_expanded", False)
                     bubble.setHtml(full_html)
                     fit_bubble_size(bubble, self.window.chat_scroll_area.viewport())
-                elif self.window._current_response_index is not None:
-                    self.window._update_bubble(self.window._current_response_index, PET_MSG_FORMAT.format(text=html_reply))
+                    
+                    # 스냅샷의 사고 과정 속성도 업데이트
+                    self.window._update_bubble_thinking_properties(
+                        self.window._current_response_index,
+                        html_reply,
+                        thinking_html,
+                        False
+                    )
                 else:
-                    self.window._add_bubble(PET_MSG_FORMAT.format(text=html_reply), "pet")
-                self.window.scrollToBottom()
-                self.window._current_stream_text = ""
-                self.window._thinking_logs = []
-                self.window._thinking_stream_buffer = ""
+                    self.window._update_bubble(self.window._current_response_index, PET_MSG_FORMAT.format(text=html_reply))
             else:
-                self.window._streaming = False
-                self.window._current_stream_text = ""
-                self.window._flush_thinking_buffer()
-            
-            if data.get("session_id"):
-                self.window.chat_client.session_id = data["session_id"]
-                self.window.current_session.session_id = data["session_id"]
-            self.window._current_node_name = None
+                self.window._add_bubble(PET_MSG_FORMAT.format(text=html_reply), "pet")
+                
+            self.window.scrollToBottom()
+            self.window._reset_stream_state()
             self.window.input_field.setEnabled(True)
             self.window.attach_btn.setEnabled(True)
             self.window.input_field.setFocus()
-
-        else:
-            reply = data.get("response") or data.get("message") or str(data)
-            html_reply = convert_markdown_to_html(reply)
-            self.window._add_bubble(PET_MSG_FORMAT.format(text=html_reply), "pet")
+            
+        elif msg_type == "chat":
+            msg_id = payload.get("message_id")
+            if msg_id and msg_id in self.window.sent_message_ids:
+                return
+            
+            role = payload.get("role", "user")
+            text = payload.get("message", "")
+            images = payload.get("images", [])
+            
+            formatted_text = text
+            if images:
+                for img in images:
+                    formatted_text += f"\n\n![이미지]({img})"
+            
+            html_content = convert_markdown_to_html(formatted_text)
+            
+            if role == "user":
+                self.window._add_bubble(USER_MSG_FORMAT.format(text=html_content), "user")
+            else:
+                self.window._add_bubble(PET_MSG_FORMAT.format(text=html_content), "pet")
             self.window.scrollToBottom()
-
-        if data.get("session_id"):
-            self.window.chat_client.session_id = data["session_id"]
-            self.window.current_session.session_id = data["session_id"]
-        self.window.pending_tool_call_id = data.get("tool_call_id")
-        
-        is_waiting = (status == "approval_required")
-        self.window.btn_area.setVisible(is_waiting)
-        self.window.input_field.setEnabled(not is_waiting)
-        self.window.attach_btn.setEnabled(not is_waiting)
-        if not is_waiting: self.window.input_field.setFocus()
+            
+        elif msg_type == "approval_response":
+            approve = payload.get("approve", False)
+            text = "✅ 승인합니다. (서버/앱 연동)" if approve else "❌ 거절합니다. (서버/앱 연동)"
+            html_text = convert_markdown_to_html(text)
+            self.window._add_bubble(USER_MSG_FORMAT.format(text=html_text), "user")
+            self.window.scrollToBottom()
+            
+        elif msg_type == "session_sync":
+            raw_sessions = payload.get("sessions", [])
+            # sessions 필드가 str 리스트 또는 SessionItem 객체 리스트 모두 지원
+            session_ids = []
+            session_titles = {}  # session_id -> title 매핑
+            for item in raw_sessions:
+                if isinstance(item, str):
+                    session_ids.append(item)
+                elif isinstance(item, dict):
+                    sid = item.get("session_id") or item.get("id")
+                    if sid:
+                        session_ids.append(sid)
+                        title = item.get("title")
+                        if title:
+                            session_titles[sid] = title
+                            
+            old_current_id = self.window.current_session.session_id
+            self.window.sync_session_list(session_ids, session_titles)
+            
+            # 처음 구동(최초 동기화) 시 또는 활성 세션이 변경된 경우 가장 최신(0번째) 세션 자동 로드
+            if self.window._is_first_sync:
+                self.window._is_first_sync = False
+                if self.window.sessions:
+                    latest_session = self.window.sessions[0]
+                    if self.window.current_session.session_id != latest_session.session_id:
+                        self.window._load_session(latest_session)
+                    else:
+                        if latest_session.session_id:
+                            payload = {"type": "get_history", "payload": {"session_id": latest_session.session_id}}
+                            self.window.chat_client.send_message(payload)
+            else:
+                # 서버 동기화 후 활성 세션이 변경되었거나(예: 복원된 세션이 서버에 없음) 이전에 세션이 없었던 경우 자동 로드
+                if self.window.current_session.session_id and self.window.current_session.session_id != old_current_id:
+                    self.window._load_session(self.window.current_session)
+            
+        elif msg_type == "session_created":
+            sid = payload.get("session_id")
+            self.window.add_session_to_list(sid)
+            
+        elif msg_type == "session_deleted":
+            sid = payload.get("session_id")
+            self.window.remove_session_from_list(sid)
+            
+        elif msg_type == "history_res":
+            history = payload.get("history", [])
+            self.window.render_history(history)
+            # 첫 번째 사용자 메시지를 기반으로 현재 세션 제목 업데이트
+            for m in history:
+                role = m.get("role", "")
+                # message 또는 content 키 모두 지원
+                text = m.get("message") or m.get("content", "")
+                if role == "user" and text:
+                    self.window.current_session.update_title_from_message(text)
+                    self.window._refresh_sidebar_item(self.window.current_session)
+                    break
+            
+        elif msg_type == "status":
+            is_busy = payload.get("status") == "busy"
+            self.window.set_agent_busy(is_busy)
