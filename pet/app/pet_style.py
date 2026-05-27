@@ -1,6 +1,7 @@
-PET_WIDTH = 50
-PET_HEIGHT = 50
-PET_MOVIE_PATH = "Assets/pet.gif"
+PET_WIDTH = 65
+PET_HEIGHT = 65
+PET_MOVIE_PATH = "Assets/bee/bee_fly_fast.gif"
+
 
 CHAT_WIN_OFFSET_X = -125
 CHAT_WIN_OFFSET_Y = -370

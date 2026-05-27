@@ -2,13 +2,14 @@ import html
 import json
 import base64
 import os
+import uuid
 
 from PySide6.QtWidgets import (
     QWidget, QTextEdit, QTextBrowser, QVBoxLayout, QPushButton, QHBoxLayout,
     QApplication, QGraphicsDropShadowEffect, QLabel,
-    QFileDialog, QScrollArea, QSlider
+    QFileDialog, QScrollArea, QSlider, QMessageBox
 )
-from PySide6.QtCore import Qt, Signal, QPoint, QTimer, QEvent, QRect, QUrl
+from PySide6.QtCore import Qt, Signal, QPoint, QTimer, QEvent, QRect, QUrl, QSettings
 from PySide6.QtGui import QColor, QPixmap, QCursor, QDesktopServices
 
 from app.chat_style import (
@@ -64,6 +65,7 @@ SIDEBAR_ANIM_DURATION = 180  # 사이드바 애니메이션 시간(ms)
 class ChatWindow(QWidget):
     def __init__(self, pet_window=None):
         super().__init__(pet_window)
+        self.pet_window = pet_window
         self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
@@ -102,12 +104,33 @@ class ChatWindow(QWidget):
 
         self.message_history = []
         
+        # ── 로컬 세션 상태 로드 (낙관적 UI) ────────────────────────
+        self.settings = QSettings("PetAgent", "ChatApp")
+        saved_session_ids = self.settings.value("agent_sessions_list", [])
+        saved_session_titles_json = self.settings.value("agent_session_titles", "{}")
+        try:
+            saved_session_titles = json.loads(saved_session_titles_json)
+        except Exception:
+            saved_session_titles = {}
+        saved_current_id = self.settings.value("agent_session_id", None)
+        
         # ── 세션 관리 상태 ──────────────────────────────────
         self._sidebar_expanded = False
-        self._session_item_btns: list[tuple] = []  # (ChatSession, QPushButton)
+        self._session_item_btns: list[tuple] = []  # (ChatSession, QPushButton, QWidget)
         self.sessions: list[ChatSession] = []
-        self.current_session: ChatSession = ChatSession()
-        self.sessions.append(self.current_session)
+        self._is_first_sync = True
+        
+        if saved_session_ids:
+            for sid in saved_session_ids:
+                title = saved_session_titles.get(sid) or f"세션: {sid[:6]}..."
+                self.sessions.append(ChatSession(session_id=sid, title=title))
+            current_found = next((s for s in self.sessions if s.session_id == saved_current_id), None)
+            self.current_session = current_found if current_found else self.sessions[0]
+        else:
+            self.current_session = ChatSession()
+            self.sessions.append(self.current_session)
+
+        self.sent_message_ids = set()
 
         # ── 채팅 스크롤 영역 (개별 말풍선 위젯 방식) ──
         self.chat_scroll_area = QScrollArea()
@@ -231,12 +254,21 @@ class ChatWindow(QWidget):
         self.container.installEventFilter(self)
         self.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
 
-        
         self.pending_tool_call_id = None
         
         self.chat_client = ChatClient(ws_url="ws://localhost:8000/ws")
+        self.chat_client.session_id = self.current_session.session_id
         self.chat_client.signaler.response_received.connect(self.on_response_received)
         self.chat_client.signaler.error_occurred.connect(self.on_error_occurred)
+        self.chat_client.signaler.connected.connect(self._on_ws_connected)
+
+        # Race condition 방지: 이미 연결된 상태라면 수동으로 트리거
+        with self.chat_client._ws_lock:
+            if self.chat_client.ws_conn:
+                QTimer.singleShot(0, self._on_ws_connected)
+
+        # 시작 시 사이드바를 기본으로 열어두어 변경사항을 바로 확인할 수 있도록 함
+        self._toggle_sidebar()
 
         # 스트림 관련 변수
         self._streaming = False
@@ -248,7 +280,6 @@ class ChatWindow(QWidget):
         self._thinking_logs: list[str] = []
         self._thinking_stream_buffer = ""
 
-        self.pet_window = pet_window
         self.handler = ChatResponseHandler(self)
 
     def attach_image(self):
@@ -327,35 +358,30 @@ class ChatWindow(QWidget):
         self._update_attach_btn_state()
 
     def start_new_chat(self):
-        """현재 세션을 저장하고 새 채팅 세션을 시작합니다."""
-        # 1. 현재 세션 저장 (말풍선이 하나라도 있을 때만)
-        if self.bubble_widgets:
-            self._save_current_session()
-            self._refresh_sidebar_item(self.current_session)
-
-        # 2. 새 세션 생성
-        new_session = ChatSession()
-        self.sessions.append(new_session)
+        """새 채팅 세션을 시작합니다."""
+        new_sid = str(uuid.uuid4())
+        
+        # 1. 로컬 상태 갱신
+        new_session = ChatSession(session_id=new_sid, title="새 채팅")
+        self.sessions.insert(0, new_session)
         self.current_session = new_session
-
-        # 3. 사이드바에 새 항목 추가
-        self._add_session_item(new_session)
-
-        # 4. 화면 초기화
+        self.chat_client.session_id = new_sid
+        
+        # 2. 화면 초기화
         self._clear_bubble_widgets()
         self._reset_stream_state()
-
-        # 5. 입력창 및 첨부 초기화
         self.input_field.clear()
         self._clear_attached_images()
         self.input_field.setEnabled(True)
         self._update_attach_btn_state()
-
-        # 6. chat_client session_id 초기화
-        self.chat_client.session_id = None
-
-        # 7. 사이드바 항목 강조 업데이트
-        self._update_session_highlight()
+        self._add_bubble(PET_MSG_FORMAT.format(text="새로운 대화 세션이 시작되었습니다."), "pet")
+        
+        # 3. 사이드바 업데이트
+        self.sync_session_list([s.session_id for s in self.sessions if s.session_id])
+        
+        # 4. 서버로 알림
+        payload = {"type": "session_created", "payload": {"session_id": new_sid}}
+        self.chat_client.send_message(payload)
 
     # ── 사이드바 구성 ────────────────────────────────────────────
 
@@ -402,8 +428,9 @@ class ChatWindow(QWidget):
         self.session_list_scroll.setWidget(self.session_list_content)
         panel_layout.addWidget(self.session_list_scroll, 1)
 
-        # 현재 세션 항목 추가 (초기 세션)
-        self._add_session_item(self.current_session)
+        # 초기 세션 목록 렌더링
+        for s in self.sessions:
+            self._add_session_item(s)
         self._update_session_highlight()
         
         # 하단 설정 / 종료 버튼 영역
@@ -435,91 +462,109 @@ class ChatWindow(QWidget):
 
     # ── 세션 저장/복원 ────────────────────────────────────────────
 
-    def _save_current_session(self):
-        """현재 화면의 말풍선들을 현재 세션에 스냅샷으로 저장합니다."""
-        snapshots = []
-        for bubble in self.bubble_widgets:
-            snap = BubbleSnapshot(
-                html=bubble.toHtml(),
-                msg_type=bubble.property("msg_type") or "pet",
-                answer_html_content=bubble.property("answer_html_content"),
-                thinking_html_content=bubble.property("thinking_html_content"),
-                thinking_expanded=bubble.property("thinking_expanded") or False,
-            )
-            snapshots.append(snap)
-        self.current_session.bubbles = snapshots
+    def _save_local_sessions(self):
+        session_ids = [s.session_id for s in self.sessions if s.session_id]
+        session_titles = {s.session_id: s.title for s in self.sessions if s.session_id}
+        self.settings.setValue("agent_sessions_list", session_ids)
+        self.settings.setValue("agent_session_titles", json.dumps(session_titles))
+        if self.current_session and self.current_session.session_id:
+            self.settings.setValue("agent_session_id", self.current_session.session_id)
+        else:
+            self.settings.remove("agent_session_id")
 
-        # 스트림 상태도 저장
-        self.current_session.stream_state = StreamState(
-            streaming=self._streaming,
-            current_stream_text=self._current_stream_text,
-            current_node_name=self._current_node_name,
-            current_response_index=self._current_response_index,
-            thinking_logs=list(self._thinking_logs),
-            thinking_stream_buffer=self._thinking_stream_buffer,
-        )
-        self.current_session.pending_tool_call_id = self.pending_tool_call_id
+    def _on_ws_connected(self):
+        # 웹소켓 연결 성공 시, 로컬에 저장된 세션이 있다면 즉시 히스토리 로드
+        if self.current_session.session_id:
+            self._load_session(self.current_session)
 
     def _load_session(self, session: ChatSession):
-        """선택된 세션의 말풍선을 화면에 복원합니다."""
-        # 현재 세션 저장
-        if self.bubble_widgets:
-            self._save_current_session()
-
-        # 화면 초기화
         self._clear_bubble_widgets()
-
-        # 세션 전환
+        self._reset_stream_state()
         self.current_session = session
         self.chat_client.session_id = session.session_id
-
-        # 스트림 상태 복원
-        ss = session.stream_state
-        self._streaming = ss.streaming
-        self._current_stream_text = ss.current_stream_text
-        self._current_node_name = ss.current_node_name
-        self._current_response_index = ss.current_response_index
-        self._thinking_logs = list(ss.thinking_logs)
-        self._thinking_stream_buffer = ss.thinking_stream_buffer
-        self.pending_tool_call_id = session.pending_tool_call_id
-
-        # 말풍선 복원
-        for snap in session.bubbles:
-            bubble = self._add_bubble(snap.html, snap.msg_type)
-            if snap.answer_html_content is not None:
-                bubble.setProperty("answer_html_content", snap.answer_html_content)
-                bubble.setProperty("thinking_html_content", snap.thinking_html_content)
+        self._save_local_sessions()
+        
+        # 만약 로컬에 이미 보존된 대화 이력이 있다면 즉시 복원 (사용자 경험/반응성 극대화)
+        if session.bubbles:
+            for snap in session.bubbles:
+                bubble = self._add_bubble(snap.html, snap.msg_type, add_to_session=False)
+                # 사고 과정 프로퍼티 복구
+                if snap.answer_html_content is not None:
+                    bubble.setProperty("answer_html_content", snap.answer_html_content)
+                if snap.thinking_html_content is not None:
+                    bubble.setProperty("thinking_html_content", snap.thinking_html_content)
                 bubble.setProperty("thinking_expanded", snap.thinking_expanded)
-
-        self.scrollToBottom()
+            self.scrollToBottom()
+        else:
+            if session.session_id:
+                self._add_bubble(PET_MSG_FORMAT.format(text=f"세션({session.session_id[:6]}...)의 대화를 불러오는 중..."), "pet", add_to_session=False)
+                
+        # 서버에 최신 대화 이력 동기화 요청
+        if session.session_id:
+            payload = {"type": "get_history", "payload": {"session_id": session.session_id}}
+            self.chat_client.send_message(payload)
+            
         self._update_session_highlight()
 
     # ── 사이드바 항목 관리 ─────────────────────────────────────────
 
-    def _add_session_item(self, session: ChatSession):
-        """사이드바 목록에 세션 항목 버튼을 추가합니다."""
+    def _add_session_item(self, session: ChatSession, index: int = -1):
+        """사이드바 목록에 세션 항목 버튼(+삭제 버튼)을 행 위젯으로 추가합니다."""
+        row = QWidget()
+        row.setStyleSheet("background: transparent;")
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(2)
+
         btn = QPushButton(f"💬 {session.title}")
         btn.setStyleSheet(SESSION_ITEM_STYLE)
         btn.setToolTip(session.title)
         btn.clicked.connect(lambda checked=False, s=session: self._on_session_clicked(s))
 
-        # stretch 앞에 삽입
-        idx = self.session_list_layout.count() - 1
-        self.session_list_layout.insertWidget(idx, btn)
+        del_btn = QPushButton("🗑")
+        del_btn.setFixedSize(28, 28)
+        del_btn.setToolTip("이 세션 삭제")
+        del_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #888888;
+                border: none;
+                border-radius: 6px;
+                font-size: 13px;
+                padding: 2px;
+            }
+            QPushButton:hover {
+                background-color: rgba(220,50,50,180);
+                color: white;
+            }
+        """)
+        del_btn.clicked.connect(lambda checked=False, s=session: self._delete_session(s))
 
-        self._session_item_btns.append((session, btn))
+        row_layout.addWidget(btn, 1)
+        row_layout.addWidget(del_btn)
+
+        if index == -1:
+            idx = self.session_list_layout.count() - 1
+            self.session_list_layout.insertWidget(idx, row)
+        else:
+            self.session_list_layout.insertWidget(index, row)
+
+        self._session_item_btns.append((session, btn, row))
 
     def _refresh_sidebar_item(self, session: ChatSession):
         """사이드바에서 해당 세션의 버튼 텍스트를 업데이트합니다."""
-        for s, btn in self._session_item_btns:
+        for item in self._session_item_btns:
+            s, btn = item[0], item[1]
             if s is session:
                 btn.setText(f"💬 {session.title}")
                 btn.setToolTip(session.title)
+                self._save_local_sessions()
                 break
 
     def _update_session_highlight(self):
         """현재 활성 세션 항목만 강조 스타일로 표시합니다."""
-        for s, btn in self._session_item_btns:
+        for item in self._session_item_btns:
+            s, btn = item[0], item[1]
             if s is self.current_session:
                 btn.setStyleSheet(SESSION_ITEM_ACTIVE_STYLE)
             else:
@@ -530,6 +575,126 @@ class ChatWindow(QWidget):
         if session is self.current_session:
             return
         self._load_session(session)
+
+    def sync_session_list(self, session_ids: list[str], session_titles: dict | None = None):
+        """게이트웨이로부터 받은 세션 리스트 동기화"""
+        if session_titles is None:
+            session_titles = {}
+
+        # 1. 기존 버튼 위젯 제거
+        for item in self._session_item_btns:
+            row = item[2] if len(item) > 2 else item[1]
+            self.session_list_layout.removeWidget(row)
+            row.deleteLater()
+        self._session_item_btns.clear()
+
+        # 2. 기존 ChatSession 객체 매핑 저장 (id -> session)
+        existing_sessions = {s.session_id: s for s in self.sessions if s.session_id}
+        
+        # 3. 새로운 세션 리스트 재구성
+        new_sessions = []
+        for sid in session_ids:
+            title = session_titles.get(sid) or f"세션: {sid[:6]}..."
+            if sid in existing_sessions:
+                s = existing_sessions[sid]
+                # 타이틀이 업데이트되었을 수 있으므로 업데이트
+                if title and not title.startswith("세션:"):
+                    s.title = title
+            else:
+                s = ChatSession(session_id=sid, title=title)
+            new_sessions.append(s)
+            
+        self.sessions = new_sessions
+
+        # 4. 사이드바 아이템 다시 추가
+        for s in self.sessions:
+            self._add_session_item(s)
+
+        # 5. 활성 세션 업데이트
+        if self.current_session.session_id not in session_ids and self.sessions:
+            self.current_session = self.sessions[0]
+            self.chat_client.session_id = self.current_session.session_id
+            
+        self._update_session_highlight()
+        self._save_local_sessions()
+
+    def add_session_to_list(self, sid: str):
+        if not any(s.session_id == sid for s in self.sessions):
+            s = ChatSession(session_id=sid, title=f"세션: {sid[:6]}...")
+            self.sessions.insert(0, s)
+            self._add_session_item(s, index=0)
+            self._update_session_highlight()
+            self._save_local_sessions()
+
+    def remove_session_from_list(self, sid: str):
+        was_current = (self.current_session.session_id == sid)
+        # 기존 title 정보 보존
+        existing_titles = {s.session_id: s.title for s in self.sessions if s.session_id != sid}
+        self.sessions = [s for s in self.sessions if s.session_id != sid]
+        self.sync_session_list(
+            [s.session_id for s in self.sessions if s.session_id],
+            existing_titles
+        )
+        if was_current:
+            self._clear_bubble_widgets()
+            if self.sessions:
+                self.current_session = self.sessions[0]
+                self.chat_client.session_id = self.current_session.session_id
+                self._load_session(self.current_session)
+            else:
+                self._add_bubble(PET_MSG_FORMAT.format(text="모든 세션이 삭제되었습니다. 새 대화를 시작해주세요."), "pet")
+
+    def _delete_session(self, session: ChatSession):
+        """세션 삭제 확인 후 서버에 삭제 요청을 전송합니다."""
+        sid = session.session_id
+        if not sid:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "세션 삭제",
+            f"'{session.title}' 세션을 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        # 낙관적 UI 업데이트 후 서버 전송
+        self.remove_session_from_list(sid)
+        payload = {"type": "session_deleted", "payload": {"session_id": sid}}
+        self.chat_client.send_message(payload)
+                
+    def render_history(self, history: list[dict]):
+        self._clear_bubble_widgets()
+        # 로컬 세션의 bubbles 버퍼 초기화 (서버 응답 데이터로 대체)
+        self.current_session.bubbles.clear()
+        
+        if not history:
+            self._add_bubble(PET_MSG_FORMAT.format(text="이전 대화가 없습니다."), "pet")
+            return
+        for m in history:
+            role = m.get("role", "pet")
+            text = m.get("message", "")
+            images = m.get("images", [])
+            formatted_text = text
+            for img in images:
+                formatted_text += f"\n\n![이미지]({img})"
+            html_content = convert_markdown_to_html(formatted_text)
+            
+            # _add_bubble을 호출하면서 add_to_session=True 로 저장
+            self._add_bubble(
+                USER_MSG_FORMAT.format(text=html_content) if role == "user" else PET_MSG_FORMAT.format(text=html_content),
+                role,
+                add_to_session=True
+            )
+        self.scrollToBottom()
+        
+    def set_agent_busy(self, is_busy: bool):
+        self.input_field.setEnabled(not is_busy)
+        self.attach_btn.setEnabled(not is_busy)
+        if not is_busy:
+            self.input_field.setFocus()
 
     # ── 내부 헬퍼 ─────────────────────────────────────────────────
 
@@ -562,13 +727,13 @@ class ChatWindow(QWidget):
         if not text and not images:
             return
 
-        # router.py ChatRequest.message: str 은 필수 필드이므로
-        # 이미지만 전송할 때도 빈 문자열 대신 기본 지시문을 채워 전달
-        api_message = text if text else "이미지를 분석해줘."
+        if not self.current_session.session_id:
+            self.start_new_chat()
+
+        self.set_agent_busy(True)
 
         # 채팅 히스토리에 사용자 메시지 표시
         display_text = text if text else "(이미지 전송)"
-        formatted_text = display_text
         formatted_text = display_text
         if images:
             for image_uri in images:
@@ -579,33 +744,26 @@ class ChatWindow(QWidget):
         user_html = USER_MSG_FORMAT.format(text=html_content)
         self._add_bubble(user_html, "user")
 
-        # 첫 메시지로 세션 제목 업데이트
-        self.current_session.update_title_from_message(display_text)
-        self._refresh_sidebar_item(self.current_session)
-        self._update_session_highlight()
-
-
-        thinking_html = PET_MSG_FORMAT.format(text="생각 중...")
-        self._current_response_index = len(self.bubble_widgets)
-        self._add_bubble(thinking_html, "pet")
-        self._current_node_name = None
-        self._streaming = False
-        self._current_stream_text = ""
-        self._thinking_logs = []
-        self._thinking_stream_buffer = ""
-
         self.scrollToBottom()
-
         self.input_field.clear()
         self._clear_attached_images()
-        self.input_field.setEnabled(False)
-        self.attach_btn.setEnabled(False)
 
-        payload = {"action": "chat", "message": api_message, "images": images}
+        msg_id = str(uuid.uuid4())
+        self.sent_message_ids.add(msg_id)
+
+        payload = {
+            "type": "chat",
+            "payload": {
+                "message_id": msg_id,
+                "message": text,
+                "images": images,
+                "session_id": self.current_session.session_id
+            }
+        }
         self.chat_client.send_message(payload)
 
     # ── 말풍선 위젯 헬퍼 ─────────────────────────────────────────
-    def _add_bubble(self, html_content: str, msg_type: str = "pet") -> QTextBrowser:
+    def _add_bubble(self, html_content: str, msg_type: str = "pet", add_to_session: bool = True) -> QTextBrowser:
         """개별 말풍선 QTextBrowser 위젯을 컨테이너에 담아 추가합니다."""
         container = QWidget()
         vbox = QVBoxLayout(container)
@@ -660,6 +818,9 @@ class ChatWindow(QWidget):
         # 삭제 등의 처리를 위해 컨테이너 참조 저장
         bubble.setProperty("container_widget", container)
         
+        if add_to_session:
+            self.current_session.bubbles.append(BubbleSnapshot(html=html_content, msg_type=msg_type))
+            
         return bubble
 
 
@@ -669,6 +830,19 @@ class ChatWindow(QWidget):
             bubble = self.bubble_widgets[index]
             bubble.setHtml(html_content)
             fit_bubble_size(bubble, self.chat_scroll_area.viewport())
+            
+            # 세션 스냅샷 업데이트
+            if 0 <= index < len(self.current_session.bubbles):
+                self.current_session.bubbles[index].html = html_content
+                self.current_session.bubbles[index].msg_type = msg_type
+
+    def _update_bubble_thinking_properties(self, index: int, answer_html: str, thinking_html: str, expanded: bool):
+        """특정 말풍선 스냅샷의 사고과정 프로퍼티를 업데이트합니다."""
+        if 0 <= index < len(self.current_session.bubbles):
+            snap = self.current_session.bubbles[index]
+            snap.answer_html_content = answer_html
+            snap.thinking_html_content = thinking_html
+            snap.thinking_expanded = expanded
 
     def _flush_thinking_buffer(self):
         """스트림 버퍼에 쌓인 텍스트를 사고 과정 로그에 추가합니다."""
@@ -697,6 +871,14 @@ class ChatWindow(QWidget):
             max_h = 10000 if expanded else BUBBLE_MAX_HEIGHT
             fit_bubble_size(bubble, self.chat_scroll_area.viewport(), max_height=max_h)
             self.scrollToBottom()
+
+            # 세션 스냅샷 상태 동기화
+            try:
+                idx = self.bubble_widgets.index(bubble)
+                if 0 <= idx < len(self.current_session.bubbles):
+                    self.current_session.bubbles[idx].thinking_expanded = expanded
+            except ValueError:
+                pass
         else:
             QDesktopServices.openUrl(url)
 
@@ -718,21 +900,16 @@ class ChatWindow(QWidget):
         user_msg = USER_MSG_FORMAT.format(text=html_user_text)
         self._add_bubble(user_msg, "user")
 
-        thinking_html = PET_MSG_FORMAT.format(text="결과를 서버에 전달하는 중...")
-        self._current_response_index = len(self.bubble_widgets)
-        self._add_bubble(thinking_html, "pet")
-        self._current_node_name = None
-        self._streaming = False
-        self._current_stream_text = ""
-        self._thinking_logs = []
-        self._thinking_stream_buffer = ""
-
+        self.set_agent_busy(True)
         self.scrollToBottom()
 
         payload = {
-            "action": "approve",
-            "approve": is_approved,
-            "tool_call_id": self.pending_tool_call_id
+            "type": "approval_response",
+            "payload": {
+                "approve": is_approved,
+                "session_id": self.current_session.session_id,
+                "tool_call_id": self.pending_tool_call_id
+            }
         }
         self.chat_client.send_message(payload)
 

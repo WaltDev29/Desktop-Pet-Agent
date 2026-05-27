@@ -6,9 +6,10 @@ from PySide6.QtCore import QObject, Signal
 class ChatSignaler(QObject):
     response_received = Signal(dict)
     error_occurred = Signal(str)
+    connected = Signal()
 
 class ChatClient(QObject):
-    def __init__(self, ws_url="ws://localhost:8000/ws", parent=None):
+    def __init__(self, ws_url="ws://localhost:8001/ws", parent=None):
         super().__init__(parent)
         self.ws_url = ws_url
         self.signaler = ChatSignaler()
@@ -29,6 +30,15 @@ class ChatClient(QObject):
                 with self._ws_lock:
                     self.ws_conn = websocket
                 
+                self.signaler.connected.emit()
+
+                # 연결 직후 register 메시지 전송 → 서버가 session_sync로 역대 세션 목록을 응답
+                register_msg = json.dumps({
+                    "type": "register",
+                    "payload": {"role": "app", "client_id": "pet-desktop"}
+                })
+                websocket.send(register_msg)
+
                 # Listen continuously
                 while self._is_running:
                     try:
