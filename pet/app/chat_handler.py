@@ -63,10 +63,17 @@ class ChatResponseHandler:
                     self.window._add_bubble(PET_MSG_FORMAT.format(text="생각 중..."), "pet")
                     
                 if node_name == "aggregator":
-                    self.window._update_bubble(self.window._current_response_index, PET_MSG_FORMAT.format(text="답변 생성 중..."))
+                    # 최종 답변 생성 단계 진입 시 사고 과정을 박스로 감싸기 준비
+                    thinking_content = "\n".join(self.window._thinking_logs)
+                    thinking_html = convert_markdown_to_html(thinking_content) if thinking_content else ""
+                    # 빈 스트리밍 텍스트와 함께 접혀있는 사고 과정 상자를 미리 렌더링
+                    full_html = render_thinking_html("", thinking_html, expanded=False)
+                    self.window._update_bubble(self.window._current_response_index, full_html)
                 else:
                     self.window._thinking_logs.append(f"[⚙️ {node_name} 동작 중...]")
-                    self.window._update_bubble(self.window._current_response_index, PET_MSG_FORMAT.format(text="생각 중..."))
+                    thinking_content = "\n".join(self.window._thinking_logs)
+                    html_thinking = convert_markdown_to_html(f"```text\n{thinking_content}\n```")
+                    self.window._update_bubble(self.window._current_response_index, PET_MSG_FORMAT.format(text=html_thinking))
                 self.window.scrollToBottom()
                 
             elif status == "tool_start":
@@ -82,7 +89,9 @@ class ChatResponseHandler:
                     self.window._add_bubble(PET_MSG_FORMAT.format(text="도구 실행 중..."), "pet")
                     
                 self.window._thinking_logs.append(log_entry)
-                self.window._update_bubble(self.window._current_response_index, PET_MSG_FORMAT.format(text="도구 실행 중..."))
+                thinking_content = "\n".join(self.window._thinking_logs)
+                html_thinking = convert_markdown_to_html(f"```text\n{thinking_content}\n```")
+                self.window._update_bubble(self.window._current_response_index, PET_MSG_FORMAT.format(text=html_thinking))
                 self.window.scrollToBottom()
                 
         elif msg_type == "token":
@@ -97,10 +106,20 @@ class ChatResponseHandler:
                     self.window._current_stream_text = ""
                 self.window._current_stream_text += chunk
                 html_reply = convert_markdown_to_html(self.window._current_stream_text)
-                self.window._update_bubble(self.window._current_response_index, PET_MSG_FORMAT.format(text=html_reply))
+                
+                # 이미 렌더링된 사고 과정 박스와 결합하여 표시
+                thinking_content = "\n".join(self.window._thinking_logs)
+                thinking_html = convert_markdown_to_html(thinking_content) if thinking_content else ""
+                if thinking_html:
+                    full_html = render_thinking_html(html_reply, thinking_html, expanded=False)
+                    self.window._update_bubble(self.window._current_response_index, full_html)
+                else:
+                    self.window._update_bubble(self.window._current_response_index, PET_MSG_FORMAT.format(text=html_reply))
             else:
                 self.window._thinking_stream_buffer += chunk
-                self.window._update_bubble(self.window._current_response_index, PET_MSG_FORMAT.format(text="생각 중..."))
+                thinking_content = "\n".join(self.window._thinking_logs) + self.window._thinking_stream_buffer
+                html_thinking = convert_markdown_to_html(f"```text\n{thinking_content}\n```")
+                self.window._update_bubble(self.window._current_response_index, PET_MSG_FORMAT.format(text=html_thinking))
             self.window.scrollToBottom()
             
         elif msg_type == "done":
