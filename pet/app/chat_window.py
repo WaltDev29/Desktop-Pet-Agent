@@ -43,9 +43,6 @@ from app.chat_style import (
     PET_BUBBLE_STYLE,
     ERROR_BUBBLE_STYLE,
     CHAT_SCROLL_AREA_STYLE,
-    THINKING_LINK_COLLAPSED,
-    THINKING_LINK_EXPANDED,
-    THINKING_CONTENT_DIV,
 )
 
 from app.chat_network import ChatClient
@@ -279,6 +276,9 @@ class ChatWindow(QWidget):
         # 사고 과정 로그 누적
         self._thinking_logs: list[str] = []
         self._thinking_stream_buffer = ""
+
+
+        
 
         self.handler = ChatResponseHandler(self)
 
