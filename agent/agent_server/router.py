@@ -12,6 +12,9 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
+from pydantic import BaseModel
+import socket
+import httpx
 
 import os
 import sys
@@ -49,6 +52,126 @@ async def router_lifespan(app: APIRouter):
     await gateway_client.disconnect()
 
 router = APIRouter(lifespan=router_lifespan)
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+class SignupRequest(BaseModel):
+    email: str
+    password: str
+    name: str = None
+
+@router.post("/api/signup")
+async def signup_to_gateway(req: SignupRequest):
+    api_server = os.getenv("API_SERVER", "http://localhost:8000").rstrip("/")
+    signup_url = f"{api_server}/api/auth/signup"
+    
+    # 기기 식별자 준비
+    if gateway_client.device_id:
+        device_id = gateway_client.device_id
+    else:
+        device_id = str(uuid.uuid4())
+        
+    device_name = socket.gethostname()
+    
+    payload = {
+        "email": req.email,
+        "password": req.password,
+        "name": req.name,
+        "device_id": device_id,
+        "device_name": device_name,
+        "device_type": "pc"
+    }
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(signup_url, json=payload, timeout=10.0)
+            
+        if resp.status_code == 200 or resp.status_code == 201:
+            data = resp.json()
+            access_token = data.get("access_token")
+            if access_token:
+                # 성공 시 정보 파일에 저장 및 연결 재시도
+                gateway_client.save_auth(device_id, access_token)
+                
+                # 기존 연결 종료 후 재연결
+                await gateway_client.disconnect()
+                asyncio.create_task(gateway_client.connect())
+                
+                return {"status": "success", "message": "Signup successful"}
+            else:
+                return {"status": "error", "message": "No access token in response"}
+        else:
+            return {"status": "error", "message": f"Signup failed: {resp.text}"}
+    except Exception as e:
+        logger.error(f"Signup request error: {e}")
+        return {"status": "error", "message": f"Signup request error: {e}"}
+
+@router.get("/api/status")
+async def check_status():
+    is_logged_in = bool(gateway_client.device_id and gateway_client.access_token)
+    return {
+        "is_logged_in": is_logged_in,
+        "is_local_mode": gateway_client.is_local_mode
+    }
+
+@router.post("/api/logout")
+async def logout_from_gateway():
+    gateway_client.clear_auth()
+    await gateway_client.disconnect()
+    gateway_client.is_local_mode = True
+    
+    # 캐시된 세션들 초기화
+    global cached_sessions
+    cached_sessions.clear()
+    
+    return {"status": "success", "message": "Logged out successfully"}
+
+@router.post("/api/login")
+async def login_to_gateway(req: LoginRequest):
+    api_server = os.getenv("API_SERVER", "http://localhost:8000").rstrip("/")
+    login_url = f"{api_server}/api/auth/login"
+    
+    # 1. 기기 식별자 준비 (기존 정보가 있으면 유지, 없으면 새로 생성)
+    if gateway_client.device_id:
+        device_id = gateway_client.device_id
+    else:
+        device_id = str(uuid.uuid4())
+        
+    device_name = socket.gethostname()
+    
+    payload = {
+        "email": req.email,
+        "password": req.password,
+        "device_id": device_id,
+        "device_name": device_name,
+        "device_type": "pc"
+    }
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(login_url, json=payload, timeout=10.0)
+            
+        if resp.status_code == 200 or resp.status_code == 201:
+            data = resp.json()
+            access_token = data.get("access_token")
+            if access_token:
+                # 성공 시 정보 파일에 저장 및 연결 재시도
+                gateway_client.save_auth(device_id, access_token)
+                
+                # 기존 연결 종료 후 재연결
+                await gateway_client.disconnect()
+                asyncio.create_task(gateway_client.connect())
+                
+                return {"status": "success", "message": "Login successful"}
+            else:
+                return {"status": "error", "message": "No access token in response"}
+        else:
+            return {"status": "error", "message": f"Login failed: {resp.text}"}
+    except Exception as e:
+        logger.error(f"Login request error: {e}")
+        return {"status": "error", "message": f"Login request error: {e}"}
 
 # ==========================================
 # 에이전트 인스턴스 관리
