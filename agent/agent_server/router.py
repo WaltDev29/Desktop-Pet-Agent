@@ -242,7 +242,8 @@ async def _initial_state(payload: ChatPayload, session_id: str, existing_images:
         api_server = os.getenv("API_SERVER", "http://localhost").rstrip("/")
         try:
             async with httpx.AsyncClient() as client:
-                resp = await client.get(f"{api_server}/api/history/{session_id}", timeout=5.0)
+                # Gateway에서 기기별 필터링을 지원할 수 있도록 device_id 파라미터 추가
+                resp = await client.get(f"{api_server}/api/history/{session_id}?device_id={gateway_client.device_id}", timeout=5.0)
                 if resp.status_code == 200:
                     data = resp.json()
                     for item in data.get("history", []):
@@ -532,6 +533,14 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 elif msg.type in ["session_created", "session_deleted", "get_history"]:
                     if not gateway_client.is_local_mode:
+                        # Gateway가 기기별로 필터링/처리할 수 있도록 device_id를 강제 주입
+                        if isinstance(msg.payload, dict):
+                            msg.payload["device_id"] = gateway_client.device_id
+                        elif hasattr(msg.payload, "model_dump"):
+                            payload_dict = msg.payload.model_dump()
+                            payload_dict["device_id"] = gateway_client.device_id
+                            msg.payload = payload_dict
+                            
                         logger.info(f"[WebSocket] Forwarding {msg.type} to Gateway: {msg.payload}")
                         await gateway_client.send_message(msg)
                     else:
