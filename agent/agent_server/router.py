@@ -431,7 +431,8 @@ async def handle_gateway_sync(msg_type: str, payload: dict):
     logger.info(f"[GatewayHandler] Received sync event: {msg_type}")
     
     if msg_type == "session_sync":
-        cached_sessions = payload.get("sessions", [])
+        raw_sessions = payload.get("sessions", [])
+        cached_sessions = [s.get("session_id") if isinstance(s, dict) else s for s in raw_sessions]
     elif msg_type == "session_created":
         session_id = payload.get("session_id")
         if session_id and session_id not in cached_sessions:

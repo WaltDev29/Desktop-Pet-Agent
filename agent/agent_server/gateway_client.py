@@ -93,13 +93,12 @@ class GatewayClient:
         max_retries = 3
         retry_count = 0
         
-        user_id = os.getenv("USER_ID", "00000000-0000-0000-0000-000000000000")
         if self.api_server.startswith("http://"):
-            gateway_url = f"{self.api_server.replace('http://', 'ws://', 1)}/ws/{user_id}"
+            gateway_url = f"{self.api_server.replace('http://', 'ws://', 1)}/ws?token={self.access_token}"
         elif self.api_server.startswith("https://"):
-            gateway_url = f"{self.api_server.replace('https://', 'wss://', 1)}/ws/{user_id}"
+            gateway_url = f"{self.api_server.replace('https://', 'wss://', 1)}/ws?token={self.access_token}"
         else:
-            gateway_url = f"ws://localhost:8080/ws/{user_id}"
+            gateway_url = f"ws://localhost:8080/ws?token={self.access_token}"
         
         while retry_count < max_retries:
             try:

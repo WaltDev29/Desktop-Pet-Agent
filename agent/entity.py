@@ -69,6 +69,7 @@ class ApprovalResponsePayload(SessionPayload):
 
 class SessionItem(BaseModel):
     session_id: str
+    device_id: Optional[str] = None
     title: Optional[str] = None
     created_at: datetime
     updated_at: datetime
