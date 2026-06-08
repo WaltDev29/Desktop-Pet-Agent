@@ -290,7 +290,8 @@
             <input type="password" id="login-password" placeholder="Password">
             <button id="auth-btn" onclick="submitAuth()">Login</button>
             <div style="text-align: center; margin-top: 5px;">
-                <a href="#" id="toggle-auth-link" onclick="toggleAuthMode(event)" style="color: #4a90e2; text-decoration: none; font-size: 0.9em;">Need an account? Sign up</a>
+                <a href="#" id="toggle-auth-link" onclick="toggleAuthMode(event)"
+                    style="color: #4a90e2; text-decoration: none; font-size: 0.9em;">Need an account? Sign up</a>
             </div>
             <button class="skip" onclick="document.getElementById('login-overlay').style.display='none'">Skip (Local
                 Mode)</button>
@@ -340,6 +341,7 @@
         let selectedImages = []; // base64 strings
         let currentSessionId = null;
         let sessionList = [];
+        let sessionTitles = {};
         let ws = null;
         let currentMessageDiv = null;
         let thoughtLogDiv = null;
@@ -374,7 +376,7 @@
             const name = document.getElementById('login-name').value;
             const email = document.getElementById('login-email').value;
             const password = document.getElementById('login-password').value;
-            
+
             if (!email || !password) {
                 alert('이메일과 비밀번호를 입력해주세요.');
                 return;
@@ -417,13 +419,13 @@
                     currentSessionId = null;
                     renderSessionList();
                     chatBox.innerHTML = '<div class="message agent">로그아웃 되었습니다. 게이트웨이에 다시 로그인 해주세요.</div>';
-                    
+
                     // 모달 재표시
                     document.getElementById('login-overlay').style.display = 'flex';
                 } else {
                     alert('로그아웃 실패: ' + data.message);
                 }
-            } catch(e) {
+            } catch (e) {
                 alert('로그아웃 요청 실패: ' + e);
             }
         }
@@ -441,10 +443,32 @@
             listDiv.innerHTML = '';
             sessionList.forEach(sid => {
                 const btn = document.createElement('button');
-                btn.innerText = "세션: " + sid.substring(0, 6) + "...";
+                const title = sessionTitles[sid] || ("세션: " + sid.substring(0, 6) + "...");
+                btn.innerText = title;
                 btn.style.width = "100%";
                 btn.style.textAlign = "left";
                 btn.style.backgroundColor = (sid === currentSessionId) ? "#4a90e2" : "#444";
+
+                // 우클릭으로 제목 수정
+                btn.oncontextmenu = (e) => {
+                    e.preventDefault();
+                    const newTitle = prompt("세션 제목을 수정하세요:", sessionTitles[sid] || "");
+                    if (newTitle && newTitle.trim() !== "") {
+                        sessionTitles[sid] = newTitle.trim();
+                        renderSessionList();
+
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify({
+                                type: "session_update",
+                                payload: {
+                                    session_id: sid,
+                                    title: newTitle.trim()
+                                }
+                            }));
+                        }
+                    }
+                };
+
                 btn.onclick = () => {
                     currentSessionId = sid;
                     chatBox.innerHTML = '<div class="message agent">세션(' + sid.substring(0, 6) + ')의 대화를 불러오는 중...</div>';
@@ -657,7 +681,14 @@
                     }
                     // 7. 세션 초기 동기화
                     else if (type === "session_sync") {
-                        sessionList = data.sessions;
+                        const rawSessions = data.sessions || [];
+                        sessionList = rawSessions.map(s => {
+                            if (typeof s === 'object') {
+                                if (s.title) sessionTitles[s.session_id] = s.title;
+                                return s.session_id;
+                            }
+                            return s;
+                        });
                         if (currentSessionId && !sessionList.includes(currentSessionId)) {
                             currentSessionId = sessionList.length > 0 ? sessionList[0] : null;
                         } else if (!currentSessionId && sessionList.length > 0) {
@@ -668,8 +699,17 @@
                     // 8. 세션 생성 동기화
                     else if (type === "session_created") {
                         const sid = data.session_id;
+                        if (data.title) sessionTitles[sid] = data.title;
                         if (!sessionList.includes(sid)) {
                             sessionList.unshift(sid);
+                            renderSessionList();
+                        }
+                    }
+                    // 8-1. 세션 제목 업데이트 동기화
+                    else if (type === "session_update") {
+                        const sid = data.session_id;
+                        if (data.title) {
+                            sessionTitles[sid] = data.title;
                             renderSessionList();
                         }
                     }

@@ -22,7 +22,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from entity import (
         WsMessage, TokenPayload, LogPayload, ApprovalRequestPayload, DonePayload,
-        ChatPayload, ApprovalResponsePayload, AgentRegisterPayload
+        ChatPayload, ApprovalResponsePayload, AgentRegisterPayload, SessionUpdatePayload
     )
 except ImportError:
     pass
@@ -306,6 +306,33 @@ async def broadcast_event(message: WsMessage):
     if not gateway_client.is_local_mode:
         await gateway_client.send_message(message)
 
+async def generate_and_send_session_title(session_id: str, first_message: str):
+    try:
+        from graph import USE_OPENAI, MODEL, API_KEY, BASE_URL
+        from langchain_openai import ChatOpenAI
+        
+        if USE_OPENAI.lower() == "true":
+            llm = ChatOpenAI(model=MODEL, api_key=API_KEY)
+        else:
+            llm = ChatOpenAI(
+                model=MODEL,
+                base_url=BASE_URL,
+                api_key=API_KEY or "x",
+            )
+        
+        prompt = f"다음 사용자의 메시지를 15자 이내의 짧은 대화 제목으로 요약해줘. 따옴표 없이 제목만 출력해.\n\n메시지: {first_message}"
+        response = await llm.ainvoke([("user", prompt)])
+        title = response.content.strip().strip('"').strip("'")
+        
+        logger.info(f"[SessionTitle] Generated title for session {session_id}: {title}")
+        
+        payload = SessionUpdatePayload(session_id=session_id, title=title)
+        msg = WsMessage(type="session_update", payload=payload)
+        
+        await broadcast_event(msg)
+    except Exception as e:
+        logger.error(f"[SessionTitle] Error generating title: {e}")
+
 # ==========================================
 # LangGraph 실행 (공통)
 # ==========================================
@@ -404,6 +431,16 @@ async def handle_gateway_chat(payload: ChatPayload):
                 config = _make_config(session_id)
                 current_state = await agent.aget_state(config)
                 is_new_session = not bool(current_state.values)
+                
+                def _should_generate_title(sid: str) -> bool:
+                    for s in cached_sessions:
+                        if isinstance(s, dict) and s.get("session_id") == sid:
+                            return not bool(s.get("title"))
+                    return True
+                
+                if _should_generate_title(session_id):
+                    asyncio.create_task(generate_and_send_session_title(session_id, payload.message))
+                    
                 existing_images = current_state.values.get("uploaded_images", []) if current_state.values else []
                 
                 state = await _initial_state(payload, session_id, existing_images, is_new_session=is_new_session)
@@ -432,15 +469,31 @@ async def handle_gateway_sync(msg_type: str, payload: dict):
     
     if msg_type == "session_sync":
         raw_sessions = payload.get("sessions", [])
-        cached_sessions = [s.get("session_id") if isinstance(s, dict) else s for s in raw_sessions]
+        cached_sessions = []
+        for s in raw_sessions:
+            if isinstance(s, dict):
+                cached_sessions.append({"session_id": s.get("session_id"), "title": s.get("title")})
+            else:
+                cached_sessions.append({"session_id": s, "title": None})
     elif msg_type == "session_created":
         session_id = payload.get("session_id")
-        if session_id and session_id not in cached_sessions:
-            cached_sessions.insert(0, session_id)
+        title = payload.get("title")
+        if session_id:
+            cached_sessions = [s for s in cached_sessions if (s.get("session_id") if isinstance(s, dict) else s) != session_id]
+            cached_sessions.insert(0, {"session_id": session_id, "title": title})
     elif msg_type == "session_deleted":
         session_id = payload.get("session_id")
-        if session_id in cached_sessions:
-            cached_sessions.remove(session_id)
+        if session_id:
+            cached_sessions = [s for s in cached_sessions if (s.get("session_id") if isinstance(s, dict) else s) != session_id]
+    elif msg_type == "session_update":
+        session_id = payload.get("session_id")
+        title = payload.get("title")
+        for s in cached_sessions:
+            if isinstance(s, dict) and s.get("session_id") == session_id:
+                s["title"] = title
+            elif s == session_id:
+                idx = cached_sessions.index(s)
+                cached_sessions[idx] = {"session_id": session_id, "title": title}
 
     # WsMessage(type=msg_type, payload=payload)를 생성하여 브로드캐스트
     # entity.py의 WsMessage 규격을 따르되 payload는 raw dict를 허용함
@@ -492,6 +545,16 @@ async def websocket_endpoint(websocket: WebSocket):
                                         config = _make_config(sid)
                                         agent_state = await agent.aget_state(config)
                                         is_new_session = not bool(agent_state.values)
+                                        
+                                        def _should_generate_title(sid: str) -> bool:
+                                            for s in cached_sessions:
+                                                if isinstance(s, dict) and s.get("session_id") == sid:
+                                                    return not bool(s.get("title"))
+                                            return True
+                                            
+                                        if _should_generate_title(sid):
+                                            asyncio.create_task(generate_and_send_session_title(sid, payload_obj.message))
+                                            
                                         state = await _initial_state(payload_obj, sid, 
                                                                    agent_state.values.get("uploaded_images", []) if agent_state.values else [], is_new_session=is_new_session)
                                         await execute_agent(sid, state=state)
@@ -507,6 +570,16 @@ async def websocket_endpoint(websocket: WebSocket):
                                          config = _make_config(sid)
                                          agent_state = await agent.aget_state(config)
                                          is_new_session = not bool(agent_state.values)
+                                         
+                                         def _should_generate_title(sid: str) -> bool:
+                                             for s in cached_sessions:
+                                                 if isinstance(s, dict) and s.get("session_id") == sid:
+                                                     return not bool(s.get("title"))
+                                             return True
+                                             
+                                         if _should_generate_title(sid):
+                                             asyncio.create_task(generate_and_send_session_title(sid, payload_obj.message))
+                                             
                                          state = await _initial_state(payload_obj, sid, 
                                                                     agent_state.values.get("uploaded_images", []) if agent_state.values else [], is_new_session=is_new_session)
                                          await execute_agent(sid, state=state)
@@ -532,7 +605,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         # [로컬 모드] 직접 처리
                         await execute_agent(session_id, command=Command(resume=app_payload.approve))
                 
-                elif msg.type in ["session_created", "session_deleted", "get_history"]:
+                elif msg.type in ["session_created", "session_deleted", "session_update", "get_history"]:
                     if not gateway_client.is_local_mode:
                         # Gateway가 기기별로 필터링/처리할 수 있도록 device_id를 강제 주입
                         if isinstance(msg.payload, dict):

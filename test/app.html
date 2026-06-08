@@ -492,6 +492,7 @@
         let selectedImages = []; // base64 strings
         let currentSessionId = localStorage.getItem('app_session_id');
         let sessionList = JSON.parse(localStorage.getItem('app_sessions_list') || "[]");
+        let sessionTitles = JSON.parse(localStorage.getItem('app_sessions_titles') || "{}");
         let ws = null;
         let currentMessageDiv = null;
         let thoughtLogDiv = null;
@@ -511,10 +512,34 @@
             listDiv.innerHTML = '';
             sessionList.forEach(sid => {
                 const btn = document.createElement('button');
-                btn.innerText = "세션: " + sid.substring(0, 6) + "...";
+                const title = sessionTitles[sid] || ("세션: " + sid.substring(0, 6) + "...");
+                btn.innerText = title;
                 btn.style.width = "100%";
                 btn.style.textAlign = "left";
                 btn.style.backgroundColor = (sid === currentSessionId) ? "#4a90e2" : "#444";
+                
+                // 우클릭으로 제목 수정
+                btn.oncontextmenu = (e) => {
+                    e.preventDefault();
+                    const newTitle = prompt("세션 제목을 수정하세요:", sessionTitles[sid] || "");
+                    if (newTitle && newTitle.trim() !== "") {
+                        sessionTitles[sid] = newTitle.trim();
+                        localStorage.setItem('app_sessions_titles', JSON.stringify(sessionTitles));
+                        renderSessionList();
+                        
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify({
+                                type: "session_update",
+                                payload: {
+                                    session_id: sid,
+                                    title: newTitle.trim(),
+                                    device_id: targetAgentId
+                                }
+                            }));
+                        }
+                    }
+                };
+
                 btn.onclick = () => {
                     currentSessionId = sid;
                     localStorage.setItem('app_session_id', sid);
@@ -747,7 +772,11 @@
                                     if (!devId || !targetAgentId) return false;
                                     return devId.toLowerCase() === targetAgentId.toLowerCase();
                                 })
-                                .map(s => s.session_id);
+                                .map(s => {
+                                    if (s.title) sessionTitles[s.session_id] = s.title;
+                                    return s.session_id;
+                                });
+                            localStorage.setItem('app_sessions_titles', JSON.stringify(sessionTitles));
                         }
                         localStorage.setItem('app_sessions_list', JSON.stringify(sessionList));
                         if (currentSessionId && !sessionList.includes(currentSessionId)) {
@@ -761,9 +790,22 @@
                         const devId = data.device_id || data.target_agent_id || data.agent_id;
                         if (devId && targetAgentId && devId.toLowerCase() !== targetAgentId.toLowerCase()) return;
                         const sid = data.session_id;
+                        if (data.title) {
+                            sessionTitles[sid] = data.title;
+                            localStorage.setItem('app_sessions_titles', JSON.stringify(sessionTitles));
+                        }
                         if (!sessionList.includes(sid)) {
                             sessionList.unshift(sid);
                             localStorage.setItem('app_sessions_list', JSON.stringify(sessionList));
+                            renderSessionList();
+                        }
+                    }
+                    // 8-1. 세션 제목 업데이트 동기화
+                    else if (type === "session_update") {
+                        const sid = data.session_id;
+                        if (data.title) {
+                            sessionTitles[sid] = data.title;
+                            localStorage.setItem('app_sessions_titles', JSON.stringify(sessionTitles));
                             renderSessionList();
                         }
                     }
@@ -773,6 +815,8 @@
                         if (devId && targetAgentId && devId.toLowerCase() !== targetAgentId.toLowerCase()) return;
                         const sid = data.session_id;
                         sessionList = sessionList.filter(s => s !== sid);
+                        delete sessionTitles[sid];
+                        localStorage.setItem('app_sessions_titles', JSON.stringify(sessionTitles));
                         localStorage.setItem('app_sessions_list', JSON.stringify(sessionList));
                         if (currentSessionId === sid) {
                             updateAfterDeletion();

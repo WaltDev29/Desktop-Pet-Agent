@@ -23,7 +23,7 @@ class SessionPayload(BasePayload):
 MessageType = Literal[
     "register", "status", "token", "log", "approval_request", 
     "approval_response", "done", "chat", "ping", "pong", "error",
-    "session_sync", "session_created", "session_deleted",
+    "session_sync", "session_created", "session_deleted", "session_update",
     "get_history", "history_res"
 ]
 
@@ -80,6 +80,9 @@ class SessionSyncPayload(SessionPayload):
 class SessionCreatedPayload(SessionPayload):
     # session_id가 SessionPayload에 이미 존재하므로 추가 정의 불필요할 수 있으나 명시적 확인 위해 유지 가능
     title: Optional[str] = Field(None, description="세션 제목")
+
+class SessionUpdatePayload(SessionPayload):
+    title: str = Field(..., description="업데이트할 세션 제목")
 
 class SessionDeletedPayload(SessionPayload):
     pass # session_id가 SessionPayload에 포함됨
