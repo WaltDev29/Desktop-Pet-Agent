@@ -38,7 +38,7 @@ class WsMessage(BaseModel):
 
 class AgentRegisterPayload(ConnectionPayload):
     role: Literal["agent"] = "agent"
-    client_id: str = Field(..., description="에이전트 고유 ID (예: agent_pc_01)")
+    device_id: str = Field(..., description="에이전트 고유 ID (예: 생성된 UUID)")
 
 class AppRegisterPayload(ConnectionPayload):
     role: Literal["app"] = "app"
@@ -69,6 +69,7 @@ class ApprovalResponsePayload(SessionPayload):
 
 class SessionItem(BaseModel):
     session_id: str
+    device_id: Optional[str] = None
     title: Optional[str] = None
     created_at: datetime
     updated_at: datetime

@@ -219,19 +219,95 @@
         .final-response {
             white-space: pre-wrap;
         }
+
+        #login-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .login-box {
+            background: #2a2a2a;
+            padding: 30px;
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            width: 300px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
+        }
+
+        .login-box h2 {
+            margin-top: 0;
+            text-align: center;
+            color: #4a90e2;
+        }
+
+        .login-box input {
+            padding: 12px;
+            border-radius: 8px;
+            border: none;
+            background: #444;
+            color: white;
+            outline: none;
+        }
+
+        .login-box button {
+            padding: 12px;
+            background: #4a90e2;
+            border: none;
+            border-radius: 8px;
+            color: white;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        .login-box button:hover {
+            opacity: 0.9;
+        }
     </style>
 </head>
 
 <body>
 
+    <!-- Login Overlay -->
+    <div id="login-overlay">
+        <div class="login-box">
+            <h2 id="auth-title">App Login</h2>
+            <input type="text" id="login-name" placeholder="Name (Only for Signup)" style="display: none;">
+            <input type="email" id="login-email" placeholder="Email (user@example.com)">
+            <input type="password" id="login-password" placeholder="Password">
+            <button id="auth-btn" onclick="submitAuth()">Login</button>
+            <div style="text-align: center; margin-top: 5px;">
+                <a href="#" id="toggle-auth-link" onclick="toggleAuthMode(event)"
+                    style="color: #4a90e2; text-decoration: none; font-size: 0.9em;">Need an account? Sign up</a>
+            </div>
+        </div>
+    </div>
+
     <div id="main-layout" style="display: flex; gap: 20px; width: 100%; max-width: 900px; height: 80vh;">
         <!-- Sidebar for Sessions -->
         <div id="sidebar"
             style="width: 250px; background-color: #2a2a2a; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 10px;">
+            <div style="font-weight: bold; margin-bottom: 5px;">💻 PC 목록</div>
+            <div id="pc-list" style="display: flex; flex-direction: column; gap: 8px;">
+                <!-- PC 리스트 렌더링 영역 -->
+            </div>
+            <hr style="border-color: #444; width: 100%;">
+
             <button onclick="createNewSession()" style="background-color: #28a745; width: 100%;">새 대화 시작 ➕</button>
             <button onclick="deleteCurrentSession()" style="background-color: #dc3545; width: 100%;">현재 세션 삭제
                 🗑️</button>
+            <button onclick="logoutApp()" style="background-color: #666; width: 100%;">로그아웃 🚪</button>
             <hr style="border-color: #444; width: 100%;">
+            <div style="font-weight: bold; margin-bottom: 5px;">💬 대화 세션</div>
             <div id="session-list"
                 style="display: flex; flex-direction: column; gap: 8px; overflow-y: auto; flex-grow: 1;">
                 <!-- 세션 리스트 렌더링 영역 -->
@@ -257,8 +333,156 @@
 
     <script>
         // 모바일 앱은 Agent 서버가 아닌 Gateway 서버(기본 8000포트, docker-compose 기준 80포트)에 직접 연결합니다.
-        // 테스트를 위해 기본 유저 UUID인 00000000-0000-0000-0000-000000000000를 사용합니다.
-        const API_URL = "ws://petagent.aikopo.net/ws/00000000-0000-0000-0000-000000000000";
+        const GATEWAY_HOST = "petagent.aikopo.net";
+        const REST_URL = `https://${GATEWAY_HOST}`;
+
+        let appAccessToken = localStorage.getItem('app_access_token');
+        let targetAgentId = localStorage.getItem('target_agent_id');
+        let isSignupMode = false;
+
+        function toggleAuthMode(e) {
+            e.preventDefault();
+            isSignupMode = !isSignupMode;
+            document.getElementById('auth-title').innerText = isSignupMode ? "App Signup" : "App Login";
+            document.getElementById('login-name').style.display = isSignupMode ? "block" : "none";
+            document.getElementById('auth-btn').innerText = isSignupMode ? "Sign Up" : "Login";
+            document.getElementById('toggle-auth-link').innerText = isSignupMode ? "Already have an account? Login" : "Need an account? Sign up";
+        }
+
+        function generateDeviceId() {
+            let did = localStorage.getItem('app_device_id');
+            if (!did) {
+                did = crypto.randomUUID();
+                localStorage.setItem('app_device_id', did);
+            }
+            return did;
+        }
+
+        async function submitAuth() {
+            const name = document.getElementById('login-name').value;
+            const email = document.getElementById('login-email').value;
+            const password = document.getElementById('login-password').value;
+
+            if (!email || !password) {
+                alert('이메일과 비밀번호를 입력해주세요.');
+                return;
+            }
+            if (isSignupMode && !name) {
+                alert('이름을 입력해주세요.');
+                return;
+            }
+
+            const endpoint = isSignupMode ? `${REST_URL}/api/auth/signup` : `${REST_URL}/api/auth/login`;
+
+            const bodyData = {
+                email,
+                password
+            };
+            if (isSignupMode) bodyData.name = name;
+
+            try {
+                const res = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(bodyData)
+                });
+                const data = await res.json();
+
+                if (res.ok && data.access_token) {
+                    appAccessToken = data.access_token;
+                    localStorage.setItem('app_access_token', appAccessToken);
+                    alert((isSignupMode ? '회원가입' : '로그인') + ' 성공!');
+                    await findTargetAgent();
+                } else {
+                    alert('인증 실패: ' + (data.detail || '알 수 없는 오류'));
+                }
+            } catch (err) {
+                console.error(err);
+                alert('서버 요청 중 오류가 발생했습니다.');
+            }
+        }
+
+        let pcList = [];
+
+        async function fetchPcList() {
+            try {
+                const res = await fetch(`${REST_URL}/api/devices`, {
+                    headers: { 'Authorization': `Bearer ${appAccessToken}` }
+                });
+                const devices = await res.json();
+                pcList = devices.filter(d => d.device_type === 'pc');
+                renderPcList();
+                return pcList;
+            } catch (err) {
+                console.error(err);
+                return [];
+            }
+        }
+
+        function renderPcList() {
+            const listDiv = document.getElementById('pc-list');
+            listDiv.innerHTML = '';
+            pcList.forEach(pc => {
+                const btn = document.createElement('button');
+                const statusIcon = pc.is_online ? '🟢' : '⚪';
+                btn.innerText = `${statusIcon} ${pc.device_name}`;
+                btn.style.width = "100%";
+                btn.style.textAlign = "left";
+                btn.style.backgroundColor = (pc.device_id === targetAgentId) ? "#4a90e2" : "#444";
+                btn.onclick = () => {
+                    if (targetAgentId === pc.device_id) return;
+                    targetAgentId = pc.device_id;
+                    localStorage.setItem('target_agent_id', targetAgentId);
+
+                    // 세션 리스트 초기화
+                    sessionList = [];
+                    currentSessionId = null;
+                    localStorage.removeItem('app_session_id');
+                    localStorage.removeItem('app_sessions_list');
+                    renderSessionList();
+                    chatBox.innerHTML = '<div class="message agent">PC가 변경되었습니다. 대화를 불러오는 중...</div>';
+
+                    renderPcList();
+
+                    // 기존 연결 종료 후 재연결
+                    if (ws) {
+                        ws.close();
+                    }
+                    connectWebSocket();
+                };
+                listDiv.appendChild(btn);
+            });
+        }
+
+        async function findTargetAgent() {
+            const pcs = await fetchPcList();
+            if (pcs.length > 0) {
+                targetAgentId = pcs[0].device_id;
+                localStorage.setItem('target_agent_id', targetAgentId);
+                document.getElementById('login-overlay').style.display = 'none';
+                renderPcList();
+                connectWebSocket();
+            } else {
+                alert('연결 가능한 PC 에이전트를 찾을 수 없습니다. PC에서 먼저 로그인해주세요.');
+            }
+        }
+
+        // 초기 상태 확인
+        if (appAccessToken && targetAgentId) {
+            document.addEventListener("DOMContentLoaded", () => {
+                document.getElementById('login-overlay').style.display = 'none';
+                fetchPcList();
+                connectWebSocket(); // 토큰과 targetAgentId가 있으면 바로 연결
+            });
+        }
+
+        function logoutApp() {
+            localStorage.removeItem('app_access_token');
+            localStorage.removeItem('target_agent_id');
+            localStorage.removeItem('app_session_id');
+            localStorage.removeItem('app_sessions_list');
+            location.reload();
+        }
         const fileInput = document.getElementById('file-input');
         const previewContainer = document.getElementById('image-preview-container');
         const messageInput = document.getElementById('message-input');
@@ -300,7 +524,7 @@
                     if (ws && ws.readyState === WebSocket.OPEN) {
                         ws.send(JSON.stringify({
                             type: "get_history",
-                            payload: { session_id: sid }
+                            payload: { session_id: sid, device_id: targetAgentId }
                         }));
                     }
                     renderSessionList();
@@ -318,7 +542,7 @@
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                     type: "session_created",
-                    payload: { session_id: currentSessionId }
+                    payload: { session_id: currentSessionId, device_id: targetAgentId }
                 }));
             } else {
                 updateSessionStorage();
@@ -340,7 +564,7 @@
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                     type: "session_deleted",
-                    payload: { session_id: sidToDelete }
+                    payload: { session_id: sidToDelete, device_id: targetAgentId }
                 }));
             }
         }
@@ -356,7 +580,16 @@
         renderSessionList();
 
         function connectWebSocket() {
-            ws = new WebSocket(API_URL);
+            if (!targetAgentId) return;
+            
+            // 토큰이 없으면 연결 시도 불가
+            if (!appAccessToken) {
+                console.error("[App] No access token available for WebSocket connection.");
+                return;
+            }
+
+            const dynamicApiUrl = `wss://${GATEWAY_HOST}/ws?token=${appAccessToken}`;
+            ws = new WebSocket(dynamicApiUrl);
 
             ws.onopen = () => {
                 appendMessage("게이트웨이 서버와 연결되었습니다. 🟢", "agent");
@@ -364,7 +597,7 @@
                     type: "register",
                     payload: {
                         role: "app",
-                        client_id: "test_app_1"
+                        device_id: "00000000-0000-0000-0000-000000000000"
                     }
                 }));
             };
@@ -503,7 +736,19 @@
                     }
                     // 7. 세션 초기 동기화
                     else if (type === "session_sync") {
-                        sessionList = data.sessions;
+                        if (data.sessions && data.sessions.length > 0 && typeof data.sessions[0] === 'string') {
+                            // Gateway에서 단순 문자열 배열로 보낼 경우, 어느 기기의 세션인지 알 수 없으므로 전체 표시
+                            sessionList = data.sessions;
+                        } else {
+                            // 객체 배열일 경우 필터링 (미래 호환성)
+                            sessionList = data.sessions
+                                .filter(s => {
+                                    const devId = s.device_id || s.target_agent_id || s.agent_id;
+                                    if (!devId || !targetAgentId) return false;
+                                    return devId.toLowerCase() === targetAgentId.toLowerCase();
+                                })
+                                .map(s => s.session_id);
+                        }
                         localStorage.setItem('app_sessions_list', JSON.stringify(sessionList));
                         if (currentSessionId && !sessionList.includes(currentSessionId)) {
                             currentSessionId = sessionList.length > 0 ? sessionList[0] : null;
@@ -513,6 +758,8 @@
                     }
                     // 8. 세션 생성 동기화
                     else if (type === "session_created") {
+                        const devId = data.device_id || data.target_agent_id || data.agent_id;
+                        if (devId && targetAgentId && devId.toLowerCase() !== targetAgentId.toLowerCase()) return;
                         const sid = data.session_id;
                         if (!sessionList.includes(sid)) {
                             sessionList.unshift(sid);
@@ -522,6 +769,8 @@
                     }
                     // 9. 세션 삭제 동기화
                     else if (type === "session_deleted") {
+                        const devId = data.device_id || data.target_agent_id || data.agent_id;
+                        if (devId && targetAgentId && devId.toLowerCase() !== targetAgentId.toLowerCase()) return;
                         const sid = data.session_id;
                         sessionList = sessionList.filter(s => s !== sid);
                         localStorage.setItem('app_sessions_list', JSON.stringify(sessionList));
@@ -564,8 +813,7 @@
             };
         }
 
-        // 초기 웹소켓 연결
-        connectWebSocket();
+        // 초기 웹소켓 연결 (로그인/인증 상태에 따라 호출됨)
 
         function resetSendButton() {
             sendBtn.disabled = false;
