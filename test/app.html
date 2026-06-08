@@ -277,6 +277,17 @@
 
 <body>
 
+    <!-- Custom Context Menu for PC List -->
+    <div id="pc-context-menu"
+        style="display: none; position: absolute; background-color: #333; border: 1px solid #555; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.5); z-index: 2000; padding: 5px; flex-direction: column; gap: 5px; width: 120px;">
+        <button id="pc-menu-edit"
+            style="background: none; border: none; color: white; text-align: left; padding: 8px; cursor: pointer; border-radius: 4px;">✏️
+            이름 수정</button>
+        <button id="pc-menu-delete"
+            style="background: none; border: none; color: #dc3545; text-align: left; padding: 8px; cursor: pointer; border-radius: 4px;">🗑️
+            삭제</button>
+    </div>
+
     <!-- Login Overlay -->
     <div id="login-overlay">
         <div class="login-box">
@@ -429,6 +440,18 @@
                 btn.style.width = "100%";
                 btn.style.textAlign = "left";
                 btn.style.backgroundColor = (pc.device_id === targetAgentId) ? "#4a90e2" : "#444";
+
+                // 우클릭 컨텍스트 메뉴
+                btn.oncontextmenu = (e) => {
+                    e.preventDefault();
+                    currentContextMenuPcId = pc.device_id;
+                    currentContextMenuPcName = pc.device_name;
+                    const menu = document.getElementById('pc-context-menu');
+                    menu.style.display = 'flex';
+                    menu.style.left = `${e.pageX}px`;
+                    menu.style.top = `${e.pageY}px`;
+                };
+
                 btn.onclick = () => {
                     if (targetAgentId === pc.device_id) return;
                     targetAgentId = pc.device_id;
@@ -453,6 +476,63 @@
                 listDiv.appendChild(btn);
             });
         }
+
+        let currentContextMenuPcId = null;
+        let currentContextMenuPcName = null;
+
+        document.addEventListener('click', () => {
+            const menu = document.getElementById('pc-context-menu');
+            if (menu) menu.style.display = 'none';
+        });
+
+        document.getElementById('pc-menu-edit').onclick = async () => {
+            if (!currentContextMenuPcId) return;
+            const newName = prompt("PC 이름을 수정하세요:", currentContextMenuPcName);
+            if (newName && newName.trim() !== "") {
+                try {
+                    await fetch(`${REST_URL}/api/devices/${currentContextMenuPcId}`, {
+                        method: 'PATCH',
+                        headers: {
+                            'Authorization': `Bearer ${appAccessToken}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ device_name: newName.trim() })
+                    });
+                    fetchPcList();
+                } catch (e) {
+                    alert('이름 수정에 실패했습니다.');
+                }
+            }
+        };
+
+        document.getElementById('pc-menu-delete').onclick = async () => {
+            if (!currentContextMenuPcId) return;
+            if (confirm(`'${currentContextMenuPcName}' 기기를 삭제하시겠습니까? 관련 데이터가 모두 영구히 지워집니다.`)) {
+                try {
+                    await fetch(`${REST_URL}/api/devices/${currentContextMenuPcId}`, {
+                        method: 'DELETE',
+                        headers: {
+                            'Authorization': `Bearer ${appAccessToken}`
+                        }
+                    });
+
+                    if (targetAgentId === currentContextMenuPcId) {
+                        targetAgentId = null;
+                        localStorage.removeItem('target_agent_id');
+                        if (ws) ws.close();
+                        sessionList = [];
+                        currentSessionId = null;
+                        localStorage.removeItem('app_session_id');
+                        localStorage.removeItem('app_sessions_list');
+                        renderSessionList();
+                        chatBox.innerHTML = '<div class="message agent">선택된 PC가 삭제되었습니다. 다른 PC를 선택해주세요.</div>';
+                    }
+                    fetchPcList();
+                } catch (e) {
+                    alert('기기 삭제에 실패했습니다.');
+                }
+            }
+        };
 
         async function findTargetAgent() {
             const pcs = await fetchPcList();
@@ -517,7 +597,7 @@
                 btn.style.width = "100%";
                 btn.style.textAlign = "left";
                 btn.style.backgroundColor = (sid === currentSessionId) ? "#4a90e2" : "#444";
-                
+
                 // 우클릭으로 제목 수정
                 btn.oncontextmenu = (e) => {
                     e.preventDefault();
@@ -526,7 +606,7 @@
                         sessionTitles[sid] = newTitle.trim();
                         localStorage.setItem('app_sessions_titles', JSON.stringify(sessionTitles));
                         renderSessionList();
-                        
+
                         if (ws && ws.readyState === WebSocket.OPEN) {
                             ws.send(JSON.stringify({
                                 type: "session_update",
@@ -606,7 +686,7 @@
 
         function connectWebSocket() {
             if (!targetAgentId) return;
-            
+
             // 토큰이 없으면 연결 시도 불가
             if (!appAccessToken) {
                 console.error("[App] No access token available for WebSocket connection.");
