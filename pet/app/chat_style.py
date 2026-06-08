@@ -8,9 +8,7 @@ QFrame#main_container {
 
 import html
 
-import html
-
-FONT_FAMILY = "'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', '맑은 고딕', sans-serif"
+FONT_FAMILY = "'Inter', 'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', '맑은 고딕'"
 
 try:
     import markdown
@@ -202,23 +200,29 @@ BUBBLE_MAX_HEIGHT = 200
 
 # ── 사용자 메시지 HTML 템플릿 ──
 USER_MSG_FORMAT = f"""
-<div style="padding: 10px 14px; font-family: {FONT_FAMILY}; font-size: 13px; line-height: 1.5; text-align: left;">
-    {{text}}
-</div>
+<body style="margin: 0; padding: 0; font-family: {FONT_FAMILY};">
+    <div style="padding: 12px 16px; font-size: 13px; line-height: 1.5; text-align: left;">
+        {{text}}
+    </div>
+</body>
 """
 
 # ── 펫 메시지 HTML 템플릿 ──
 PET_MSG_FORMAT = f"""
-<div style="padding: 10px 14px; font-family: {FONT_FAMILY}; font-size: 13px; line-height: 1.5;">
-    {{text}}
-</div>
+<body style="margin: 0; padding: 0; font-family: {FONT_FAMILY};">
+    <div style="padding: 12px 16px; font-size: 13px; line-height: 1.5;">
+        {{text}}
+    </div>
+</body>
 """
 
 # ── 에러 메시지 HTML 템플릿 ──
 ERROR_MSG_FORMAT = f"""
-<div style="padding: 10px 14px; font-family: {FONT_FAMILY}; font-size: 12px; word-wrap: break-word; word-break: break-word;">
-    ⚠️ {{text}}
-</div>
+<body style="margin: 0; padding: 0; font-family: {FONT_FAMILY};">
+    <div style="padding: 10px 14px; font-size: 12px; word-wrap: break-word; word-break: break-word;">
+        ⚠️ {{text}}
+    </div>
+</body>
 """
 
 
@@ -231,7 +235,7 @@ def _bubble_style(bg_color: str, text_color: str = "#111111") -> str:
         font-family: {FONT_FAMILY};
         font-size: 13px;
         color: {text_color};
-        border-radius: 16px;
+        border-radius: 8px;
     }}
     QScrollBar:vertical {{
         width: 8px;
@@ -256,21 +260,24 @@ PET_BUBBLE_STYLE = _bubble_style("#E3F2FD", "#111111")
 ERROR_BUBBLE_STYLE = _bubble_style("#FFEBEB", "#FF0000")
 
 # ── 사고 과정 HTML 템플릿 (말풍선 내부 인라인) ──
-THINKING_LINK_COLLAPSED = f'<a href="action:toggle_thinking" style="display: inline-block; color: #2979B0; font-family: {FONT_FAMILY}; font-size: 11px; font-weight: bold; text-decoration: none; background-color: #D0E4F0; border-radius: 6px; padding: 3px 8px;">💭 사고 과정 보기  ▶</a>'
+THINKING_BLOCK_COLLAPSED = f'''
+<div style="margin: 0 10px 8px 10px; border: 1px solid #9BBDDA; border-radius: 10px; padding: 8px 12px;">
+<table width="100%" cellpadding="0" cellspacing="0"><tr>
+    <td width="22" style="color: #2A62A8; font-size: 13px;">🧠</td>
+    <td><a href="action:toggle_thinking" style="color: #1A4F9A; font-family: {FONT_FAMILY}; font-size: 11.5px; font-weight: bold; text-decoration: none;">사고 과정 보기</a></td>
+    <td align="right"><a href="action:toggle_thinking" style="color: #2A62A8; text-decoration: none; font-size: 11px;">▶</a></td>
+</tr></table>
+</div>
+'''
 
-THINKING_LINK_EXPANDED = f'<a href="action:toggle_thinking" style="display: inline-block; color: #2979B0; font-family: {FONT_FAMILY}; font-size: 11px; font-weight: bold; text-decoration: none; background-color: #D0E4F0; border-radius: 6px; padding: 3px 8px;">💭 사고 과정 보기  ▼</a>'
-
-THINKING_CONTENT_DIV = f'''
-<div style="
-    border-top: 1px dashed #B8CCE0;
-    padding: 10px 0; 
-    margin: 8px 0 0 0;
-    font-family: {FONT_FAMILY}; 
-    font-size: 11px; 
-    color: #3A5570; 
-    line-height: 1.4;
-">
-    {{content}}
+THINKING_BLOCK_EXPANDED = f'''
+<div style="margin: 0 10px 8px 10px; border: 1px solid #9BBDDA; border-radius: 10px; padding: 8px 12px;">
+<table width="100%" cellpadding="0" cellspacing="0"><tr>
+    <td width="22" style="color: #2A62A8; font-size: 13px;">🧠</td>
+    <td><a href="action:toggle_thinking" style="color: #1A4F9A; font-family: {FONT_FAMILY}; font-size: 11.5px; font-weight: bold; text-decoration: none;">사고 과정 닫기</a></td>
+    <td align="right"><a href="action:toggle_thinking" style="color: #2A62A8; text-decoration: none; font-size: 11px;">▼</a></td>
+</tr></table>
+<div style="border-top: 1px solid #9BBDDA; margin-top: 8px; padding-top: 8px; font-family: 'Courier New', monospace; font-size: 11.5px; color: #1E3A6E; line-height: 1.6; white-space: pre-wrap;">{{content}}</div>
 </div>
 '''
 
@@ -418,5 +425,68 @@ QPushButton {{
 }}
 QPushButton:hover {{
     background-color: rgba(41,121,176,220);
+}}
+"""
+
+# ── 로그인 창 스타일 ──
+LOGIN_INPUT_STYLE = f"""
+QLineEdit {{
+    background-color: #1E2A38;
+    color: #E0E0E0;
+    border: 1px solid #2C3E50;
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-family: {FONT_FAMILY};
+    font-size: 13px;
+}}
+QLineEdit:focus {{
+    border: 1px solid #3498DB;
+}}
+"""
+
+LOGIN_BTN_STYLE = f"""
+QPushButton {{
+    background-color: #2979B0;
+    color: white;
+    border-radius: 10px;
+    border: none;
+    font-family: {FONT_FAMILY};
+    font-weight: bold;
+    font-size: 13px;
+    padding: 10px 0px;
+}}
+QPushButton:hover {{
+    background-color: #1A5F8F;
+}}
+QPushButton:pressed {{
+    background-color: #144D78;
+}}
+"""
+
+LOGIN_ERROR_LABEL_STYLE = f"""
+QLabel {{
+    color: #FF6B6B;
+    font-family: {FONT_FAMILY};
+    font-size: 11px;
+}}
+"""
+
+LOGIN_WINDOW_STYLE = f"""
+QFrame#login_container {{
+    background-color: rgba(255, 255, 255, 245);
+    border: 2px solid #E0E0E0;
+    border-radius: 15px;
+}}
+QLabel#login_title {{
+    color: #1A1A2E;
+    font-family: {FONT_FAMILY};
+    font-size: 16px;
+    font-weight: bold;
+}}
+QLabel#login_field_label {{
+    color: #555555;
+    font-family: {FONT_FAMILY};
+    font-size: 12px;
+    font-weight: bold;
 }}
 """

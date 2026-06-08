@@ -43,9 +43,6 @@ from app.chat_style import (
     PET_BUBBLE_STYLE,
     ERROR_BUBBLE_STYLE,
     CHAT_SCROLL_AREA_STYLE,
-    THINKING_LINK_COLLAPSED,
-    THINKING_LINK_EXPANDED,
-    THINKING_CONTENT_DIV,
 )
 
 from app.chat_network import ChatClient
@@ -177,7 +174,7 @@ class ChatWindow(QWidget):
         
         self.new_chat_btn = QPushButton("신규 채팅")
         self.new_chat_btn.setStyleSheet(NEW_CHAT_BTN_STYLE)
-        self.new_chat_btn.clicked.connect(self.start_new_chat)
+        self.new_chat_btn.clicked.connect(self.prepare_new_chat)
         
         self.settings_btn = QPushButton("⚙️ 설정")
         self.settings_btn.setStyleSheet(SETTINGS_BTN_STYLE)
@@ -280,6 +277,9 @@ class ChatWindow(QWidget):
         self._thinking_logs: list[str] = []
         self._thinking_stream_buffer = ""
 
+
+        
+
         self.handler = ChatResponseHandler(self)
 
     def attach_image(self):
@@ -357,29 +357,49 @@ class ChatWindow(QWidget):
         self.image_preview_area.hide()
         self._update_attach_btn_state()
 
-    def start_new_chat(self):
-        """새 채팅 세션을 시작합니다."""
-        new_sid = str(uuid.uuid4())
-        
-        # 1. 로컬 상태 갱신
-        new_session = ChatSession(session_id=new_sid, title="새 채팅")
+    def prepare_new_chat(self):
+        """신규 채팅을 입력할 수 있도록 UI를 초기화하고 임시 세션 상태로 전환합니다."""
+        if self.current_session and not self.current_session.session_id:
+            return  # 이미 임시 세션 상태인 경우 무시
+            
+        # 임시 세션 생성
+        new_session = ChatSession(session_id=None, title="새 대화")
         self.sessions.insert(0, new_session)
         self.current_session = new_session
-        self.chat_client.session_id = new_sid
+        self.chat_client.session_id = None
         
-        # 2. 화면 초기화
+        # 사이드바에 임시 항목 추가
+        self._add_session_item(new_session, index=0)
+        self._update_session_highlight()
+        
+        # 화면 초기화
         self._clear_bubble_widgets()
         self._reset_stream_state()
         self.input_field.clear()
         self._clear_attached_images()
         self.input_field.setEnabled(True)
         self._update_attach_btn_state()
-        self._add_bubble(PET_MSG_FORMAT.format(text="새로운 대화 세션이 시작되었습니다."), "pet")
+        self._add_bubble(PET_MSG_FORMAT.format(text="새로운 대화 세션이 시작되었습니다."), "pet", add_to_session=False)
+
+    def create_new_session(self):
+        """메시지를 처음 전송할 때 임시 세션을 실제 세션으로 확정합니다."""
+        new_sid = str(uuid.uuid4())
         
-        # 3. 사이드바 업데이트
+        # 현재 임시 세션에 ID 부여
+        if self.current_session and not self.current_session.session_id:
+            self.current_session.session_id = new_sid
+            self.current_session.title = "새 채팅"
+        else:
+            new_session = ChatSession(session_id=new_sid, title="새 채팅")
+            self.sessions.insert(0, new_session)
+            self.current_session = new_session
+            
+        self.chat_client.session_id = new_sid
+        
+        # 사이드바 업데이트 (sync_session_list 사용)
         self.sync_session_list([s.session_id for s in self.sessions if s.session_id])
         
-        # 4. 서버로 알림
+        # 서버로 알림
         payload = {"type": "session_created", "payload": {"session_id": new_sid}}
         self.chat_client.send_message(payload)
 
@@ -591,8 +611,14 @@ class ChatWindow(QWidget):
         # 2. 기존 ChatSession 객체 매핑 저장 (id -> session)
         existing_sessions = {s.session_id: s for s in self.sessions if s.session_id}
         
+        # 임시 세션 보존
+        temp_session = next((s for s in self.sessions if not s.session_id), None)
+        
         # 3. 새로운 세션 리스트 재구성
         new_sessions = []
+        if temp_session:
+            new_sessions.append(temp_session)
+            
         for sid in session_ids:
             title = session_titles.get(sid) or f"세션: {sid[:6]}..."
             if sid in existing_sessions:
@@ -611,7 +637,7 @@ class ChatWindow(QWidget):
             self._add_session_item(s)
 
         # 5. 활성 세션 업데이트
-        if self.current_session.session_id not in session_ids and self.sessions:
+        if self.current_session.session_id not in session_ids and self.current_session.session_id is not None and self.sessions:
             self.current_session = self.sessions[0]
             self.chat_client.session_id = self.current_session.session_id
             
@@ -727,8 +753,8 @@ class ChatWindow(QWidget):
         if not text and not images:
             return
 
-        if not self.current_session.session_id:
-            self.start_new_chat()
+        if not self.current_session or not self.current_session.session_id:
+            self.create_new_session()
 
         self.set_agent_busy(True)
 
@@ -743,6 +769,11 @@ class ChatWindow(QWidget):
         html_content = convert_markdown_to_html(formatted_text)
         user_html = USER_MSG_FORMAT.format(text=html_content)
         self._add_bubble(user_html, "user")
+
+        # [NEW] 즉시 펫의 초기 '요청 확인 중...' 버블 추가
+        self._reset_stream_state()
+        self._current_response_index = len(self.bubble_widgets)
+        self._add_bubble(PET_MSG_FORMAT.format(text="요청을 확인하고 있습니다..."), "pet", add_to_session=False)
 
         self.scrollToBottom()
         self.input_field.clear()

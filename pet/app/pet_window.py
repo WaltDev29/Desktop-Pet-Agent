@@ -4,6 +4,7 @@ from PySide6.QtCore import Qt, QTimer, QPoint
 from PySide6.QtGui import QMovie, QPainter
 
 from app.chat_window import ChatWindow
+from app.login_window import LoginWindow
 from app.pet_style import (
     PET_WIDTH, 
     PET_HEIGHT, 
@@ -44,7 +45,7 @@ class DirectionalPetLabel(QLabel):
         super().paintEvent(event)
 
 class PetWindow(QWidget):
-    def __init__(self):
+    def __init__(self, already_logged_in: bool = False):
         super().__init__()
 
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.SplashScreen) 
@@ -84,12 +85,19 @@ class PetWindow(QWidget):
         self.is_interacting = False
         self.is_paused = False          # 우클릭으로 멈춤 여부
         self.chat_win = ChatWindow(self)
+        self._logged_in = already_logged_in
+        self.login_win = LoginWindow(self)
+        self.login_win.login_success.connect(self._on_login_success)
 
         # ── 드래그 상태 ──────────────────────────────────────
         self._drag_active = False
         self._drag_start_cursor: QPoint | None = None
         self._drag_start_pet: QPoint | None = None
         self._drag_start_chat: QPoint | None = None
+        self._drag_start_login: QPoint | None = None
+
+        if already_logged_in:
+            QTimer.singleShot(100, self._on_login_success)
 
     def update_logic(self):
         if self.is_interacting or self.is_paused:
@@ -153,6 +161,7 @@ class PetWindow(QWidget):
         self._drag_start_cursor = cursor_global
         self._drag_start_pet = self.pos()
         self._drag_start_chat = self.chat_win.pos() if self.chat_win.isVisible() else None
+        self._drag_start_login = self.login_win.pos() if self.login_win.isVisible() else None
 
     def do_drag(self, cursor_global: QPoint):
         """드래그 중: 커서 delta만큼 펫·채팅창을 함께 이동합니다."""
@@ -160,12 +169,13 @@ class PetWindow(QWidget):
             return
         delta = cursor_global - self._drag_start_cursor
         new_pet = self._drag_start_pet + delta
-        # curr_x/y 도 갱신해 자동이동이 재개될 때 현재 위치 기준으로 시작
         self.curr_x = float(new_pet.x())
         self.curr_y = float(new_pet.y())
         self.move(new_pet)
         if self._drag_start_chat is not None:
             self.chat_win.move(self._drag_start_chat + delta)
+        if self._drag_start_login is not None:
+            self.login_win.move(self._drag_start_login + delta)
 
     def end_drag(self):
         """드래그 종료: 상태 초기화 후 자동이동 재개."""
@@ -173,9 +183,20 @@ class PetWindow(QWidget):
         self._drag_start_cursor = None
         self._drag_start_pet = None
         self._drag_start_chat = None
+        self._drag_start_login = None
         self.timer.start(16)
 
     def interact_with_pet(self):
+        if not self._logged_in:
+            self.is_interacting = True
+            pet_center_x = self.x() + (self.width() // 2)
+            login_x = pet_center_x - (self.login_win.width() // 2)
+            login_y = self.y() - self.login_win.height() - 15
+            self.login_win.move(login_x, login_y)
+            self.login_win.show()
+            self.login_win.email_input.setFocus()
+            return
+
         self.is_interacting = not self.is_interacting
         if self.is_interacting:
             pet_center_x = self.x() + (self.width() // 2)
@@ -186,3 +207,14 @@ class PetWindow(QWidget):
             self.chat_win.input_field.setFocus()
         else:
             self.chat_win.hide()
+
+    def _on_login_success(self):
+        self._logged_in = True
+        self.login_win.hide()
+        self.is_interacting = True
+        pet_center_x = self.x() + (self.width() // 2)
+        chat_x = pet_center_x - (self.chat_win.width() // 2)
+        chat_y = self.y() - self.chat_win.height() - 15
+        self.chat_win.move(chat_x, chat_y)
+        self.chat_win.show()
+        self.chat_win.input_field.setFocus()

@@ -6,9 +6,8 @@ from app.chat_style import (
     IMAGE_REMOVE_BTN_STYLE,
     FONT_FAMILY,
     PET_MSG_FORMAT,
-    THINKING_LINK_EXPANDED,
-    THINKING_LINK_COLLAPSED,
-    THINKING_CONTENT_DIV,
+    THINKING_BLOCK_EXPANDED,
+    THINKING_BLOCK_COLLAPSED,
     BUBBLE_MAX_HEIGHT,
 )
 
@@ -237,9 +236,12 @@ def fit_bubble_size(bubble: QTextBrowser, scroll_area_viewport, max_height: int 
 
 def render_thinking_html(answer_html_content: str, thinking_html_content: str, expanded: bool) -> str:
     """사고 과정 토글 + 최종 답변을 하나의 말풍선 HTML로 조합합니다."""
-    link = THINKING_LINK_EXPANDED if expanded else THINKING_LINK_COLLAPSED
-    thinking_section = THINKING_CONTENT_DIV.format(content=thinking_html_content) if expanded else ""
-    combined_text = f"{link}{thinking_section}{answer_html_content}"
+    if expanded:
+        thinking_section = THINKING_BLOCK_EXPANDED.format(content=thinking_html_content)
+    else:
+        thinking_section = THINKING_BLOCK_COLLAPSED
+        
+    combined_text = f"{thinking_section}<div style='margin-top: 4px;'>{answer_html_content}</div>"
     return PET_MSG_FORMAT.format(text=combined_text)
 
 def scroll_to_bottom(scroll_area):
