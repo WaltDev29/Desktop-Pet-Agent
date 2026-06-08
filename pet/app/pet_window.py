@@ -45,7 +45,7 @@ class DirectionalPetLabel(QLabel):
         super().paintEvent(event)
 
 class PetWindow(QWidget):
-    def __init__(self):
+    def __init__(self, already_logged_in: bool = False):
         super().__init__()
 
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.SplashScreen) 
@@ -85,7 +85,7 @@ class PetWindow(QWidget):
         self.is_interacting = False
         self.is_paused = False          # 우클릭으로 멈춤 여부
         self.chat_win = ChatWindow(self)
-        self._logged_in = False
+        self._logged_in = already_logged_in
         self.login_win = LoginWindow(self)
         self.login_win.login_success.connect(self._on_login_success)
 
@@ -95,6 +95,9 @@ class PetWindow(QWidget):
         self._drag_start_pet: QPoint | None = None
         self._drag_start_chat: QPoint | None = None
         self._drag_start_login: QPoint | None = None
+
+        if already_logged_in:
+            QTimer.singleShot(100, self._on_login_success)
 
     def update_logic(self):
         if self.is_interacting or self.is_paused:
