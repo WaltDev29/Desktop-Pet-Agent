@@ -10,6 +10,46 @@ import html
 
 FONT_FAMILY = "'Inter', 'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', '맑은 고딕'"
 
+# ── QTextDocument 전용 마크다운 스타일시트 ──
+# setDefaultStyleSheet()로 주입되어 HTML 뼈대에 스타일을 입힘
+MARKDOWN_CSS = f"""
+    body {{
+        font-family: {FONT_FAMILY};
+        font-size: 13px;
+        line-height: 1.6;
+        color: #111111;
+        margin: 0;
+        padding: 0;
+    }}
+    p {{ margin: 2px 0; }}
+    strong {{ font-weight: bold; }}
+    em {{ font-style: italic; }}
+    a {{ color: #1a73e8; text-decoration: underline; }}
+    code {{
+        font-family: 'Courier New', Courier, monospace;
+        font-size: 12px;
+        background-color: #f0f0f0;
+        color: #c0392b;
+        padding: 1px 4px;
+    }}
+    pre {{
+        font-family: 'Courier New', Courier, monospace;
+        font-size: 12px;
+        background-color: #2b2b2b;
+        color: #f8f8f2;
+        padding: 8px;
+        margin: 4px 0;
+    }}
+    ul {{ margin: 4px 0; padding-left: 18px; }}
+    ol {{ margin: 4px 0; padding-left: 18px; }}
+    li {{ margin: 2px 0; }}
+    table {{ border-collapse: collapse; margin: 6px 0; }}
+    th {{ border: 1px solid #cccccc; padding: 4px 8px; background-color: #eeeeee; font-weight: bold; }}
+    td {{ border: 1px solid #cccccc; padding: 4px 8px; }}
+    h1, h2 {{ font-size: 14px; font-weight: bold; margin: 4px 0; }}
+    h3, h4 {{ font-size: 13px; font-weight: bold; margin: 4px 0; }}
+"""
+
 try:
     import markdown
     _HAS_MARKDOWN = True
@@ -17,47 +57,15 @@ except ImportError:
     _HAS_MARKDOWN = False
 
 def convert_markdown_to_html(md_text: str) -> str:
-    """마크다운 텍스트를 HTML로 변환하고 스타일을 적용합니다."""
+    """마크다운 텍스트를 순수 HTML 구조로 변환합니다. (스타일은 MARKDOWN_CSS가 담당)"""
     if not _HAS_MARKDOWN:
-        # markdown 라이브러리가 없으면 평문 반환
         safe_text = html.escape(md_text).replace('\n', '<br>')
-        return f'<div style="margin: 0; font-family: {FONT_FAMILY}; font-size: 13px; line-height: 1.5; color: #111; word-wrap: break-word; word-break: break-word;">{safe_text}</div>'
-    
-    html_content = markdown.markdown(md_text, extensions=['nl2br', 'extra', 'tables', 'fenced_code'])
-    
-    # 마크다운 요소별 스타일 적용
-    # 코드 블록 <pre><code> 스타일
-    html_content = html_content.replace('<pre><code>', f'<pre><code style="background-color: #2d2d2d; color: #f8f8f2; padding: 10px; border-radius: 6px; font-family: \'Courier New\', monospace; font-size: 12px; line-height: 1.5; overflow-x: auto; display: block;">')
-    html_content = html_content.replace('</code></pre>', '</code></pre>')
-    
-    # 인라인 코드 <code> 스타일 (pre 태그 내부가 아닌 경우)
-    html_content = html_content.replace('<code>', f'<code style="background-color: #f5f5f5; color: #d63384; padding: 2px 6px; border-radius: 3px; font-family: \'Courier New\', monospace; font-size: 12px;">')
-    
-    # 강조 <strong> 스타일
-    html_content = html_content.replace('<strong>', '<strong style="color: #1a73e8; font-weight: bold;">')
-    
-    # 이탤릭 <em> 스타일
-    html_content = html_content.replace('<em>', '<em style="color: #666; font-style: italic;">')
-    
-    # 링크 <a> 스타일
-    html_content = html_content.replace('<a ', f'<a style="color: #1a73e8; text-decoration: none; cursor: pointer;" ')
-    
-    # 리스트 스타일
-    html_content = html_content.replace('<ul>', f'<ul style="margin: 8px 0; padding-left: 20px;">')
-    html_content = html_content.replace('<ol>', f'<ol style="margin: 8px 0; padding-left: 20px;">')
-    html_content = html_content.replace('<li>', f'<li style="margin: 4px 0;">')
-    
-    # 테이블 스타일
-    html_content = html_content.replace('<table>', f'<table style="border-collapse: collapse; margin: 8px 0; font-size: 12px; width: 100%;">')
-    html_content = html_content.replace('<th>', f'<th style="border: 1px solid #ddd; padding: 8px; background-color: #f5f5f5; text-align: left;">')
-    html_content = html_content.replace('<td>', f'<td style="border: 1px solid #ddd; padding: 8px;">')
-    
-    # 문단(<p>) 태그를 제거하고 줄바꿈(<br>)으로 대체
-    html_content = html_content.replace('<p>', '').replace('</p>', '<br>')
-    if html_content.endswith('<br>'):
-        html_content = html_content[:-4]
+        return safe_text
 
-    # 중첩 div를 제거하고 순수 HTML만 반환 (말풍선 포맷에서 처리하도록)
+    html_content = markdown.markdown(
+        md_text,
+        extensions=['nl2br', 'extra', 'tables', 'fenced_code']
+    )
     return html_content.strip()
 
 
@@ -191,95 +199,134 @@ QPushButton:hover {
 
 WINDOW_WIDTH = 450
 WINDOW_HEIGHT = 700
-SIDEBAR_WIDTH = 180  # 사이드바 열림 시 너비 (px)
-SIDEBAR_EXPANDED_WINDOW_WIDTH = WINDOW_WIDTH + SIDEBAR_WIDTH  # 사이드바 열림 시 전체 창 너비
+SIDEBAR_WIDTH = 180
+SIDEBAR_EXPANDED_WINDOW_WIDTH = WINDOW_WIDTH + SIDEBAR_WIDTH
 
-# ── 개별 말풍선(QTextBrowser) 위젯 최대 높이 임계값 (px) ──
-# 이 높이를 초과하면 말풍선 내부에 스크롤바가 생김
 BUBBLE_MAX_HEIGHT = 200
 
-# ── 사용자 메시지 HTML 템플릿 ──
-USER_MSG_FORMAT = f"""
-<body style="margin: 0; padding: 0; font-family: {FONT_FAMILY};">
-    <div style="padding: 12px 16px; font-size: 13px; line-height: 1.5; text-align: left;">
-        {{text}}
-    </div>
-</body>
+# ── 메시지 포맷 상수 (스타일은 MARKDOWN_CSS + QSS가 담당) ──
+USER_MSG_FORMAT = "{text}"
+PET_MSG_FORMAT = "{text}"
+ERROR_MSG_FORMAT = "⚠️ {text}"
+FONT_FAMILY = "'Inter', 'Pretendard', 'Apple SD Gothic Neo', '-apple-system', 'BlinkMacSystemFont', 'Malgun Gothic', sans-serif"
+
+# ── QTextDocument 전용 마크다운 스타일시트 ──
+# setDefaultStyleSheet()로 주입되어 HTML 뼈대에 스타일을 입힘
+MARKDOWN_CSS = f"""
+    body {{
+        font-family: {FONT_FAMILY};
+        font-size: 13.5px;
+        font-weight: 400;
+        line-height: 1.6;
+        color: #2C3E50;
+        margin: 0;
+        padding: 0;
+    }}
+    p {{ margin: 2px 0; }}
+    strong {{ font-weight: 600; color: #1A252F; }}
+    em {{ font-style: italic; color: #5C6D7E; }}
+    a {{ color: #2980B9; text-decoration: none; border-bottom: 1px solid #2980B9; }}
+    code {{
+        font-family: 'Courier New', Courier, monospace;
+        font-size: 12.5px;
+        background-color: #F4F6F8;
+        color: #E74C3C;
+        padding: 2px 5px;
+        border-radius: 4px;
+        border: 1px solid #E1E8ED;
+    }}
+    pre {{
+        font-family: 'Courier New', Courier, monospace;
+        font-size: 12.5px;
+        background-color: #282C34;
+        color: #ABB2BF;
+        padding: 12px;
+        border-radius: 8px;
+        line-height: 1.4;
+    }}
+    pre code {{
+        background-color: transparent;
+        color: inherit;
+        padding: 0;
+        border: none;
+    }}
+    blockquote {{
+        margin: 4px 0;
+        padding-left: 12px;
+        border-left: 4px solid #BDC3C7;
+        color: #7F8C8D;
+        background-color: #F8F9F9;
+    }}
+    ul, ol {{ margin-top: 4px; margin-bottom: 4px; padding-left: 24px; }}
+    li {{ margin-bottom: 2px; }}
+    h1, h2, h3, h4, h5, h6 {{
+        color: #2C3E50;
+        margin-top: 10px;
+        margin-bottom: 6px;
+        font-weight: 600;
+    }}
+    h1 {{ font-size: 18px; border-bottom: 1px solid #ECF0F1; padding-bottom: 4px; }}
+    h2 {{ font-size: 16px; }}
+    h3 {{ font-size: 14.5px; }}
+    hr {{ border: none; border-top: 1px solid #ECF0F1; margin: 10px 0; }}
+    table {{ border-collapse: collapse; width: 100%; margin-top: 6px; margin-bottom: 6px; }}
+    th, td {{ border: 1px solid #BDC3C7; padding: 6px 10px; }}
+    th {{ background-color: #ECF0F1; font-weight: bold; text-align: left; }}
 """
 
-# ── 펫 메시지 HTML 템플릿 ──
-PET_MSG_FORMAT = f"""
-<body style="margin: 0; padding: 0; font-family: {FONT_FAMILY};">
-    <div style="padding: 12px 16px; font-size: 13px; line-height: 1.5;">
-        {{text}}
-    </div>
-</body>
-"""
-
-# ── 에러 메시지 HTML 템플릿 ──
-ERROR_MSG_FORMAT = f"""
-<body style="margin: 0; padding: 0; font-family: {FONT_FAMILY};">
-    <div style="padding: 10px 14px; font-size: 12px; word-wrap: break-word; word-break: break-word;">
-        ⚠️ {{text}}
-    </div>
-</body>
-"""
-
-
-# ── 개별 말풍선 QTextBrowser 기본 스타일시트 ──
-def _bubble_style(bg_color: str, text_color: str = "#111111") -> str:
+def _bubble_style(bg_color: str, text_color: str = "#2C3E50", border_color: str = "none") -> str:
+    border_prop = f"border: 1px solid {border_color};" if border_color != "none" else "border: none;"
     return f"""
     QTextBrowser {{
         background-color: {bg_color};
-        border: none;
-        font-family: {FONT_FAMILY};
-        font-size: 13px;
+        {border_prop}
         color: {text_color};
-        border-radius: 8px;
+        border-radius: 14px;
+        padding: 10px 16px 10px 12px;
     }}
     QScrollBar:vertical {{
-        width: 8px;
-        background: rgba(0,0,0,30);
-        border-radius: 4px;
+        width: 6px;
+        background: transparent;
+        margin: 2px;
     }}
     QScrollBar::handle:vertical {{
-        background: rgba(120,120,120,180);
-        border-radius: 4px;
+        background: rgba(0, 0, 0, 0.2);
         min-height: 20px;
+        border-radius: 3px;
     }}
     QScrollBar::handle:vertical:hover {{
-        background: rgba(150,150,150,220);
+        background: rgba(0, 0, 0, 0.35);
     }}
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
         height: 0px;
     }}
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+        background: transparent;
+    }}
     """
 
-USER_BUBBLE_STYLE = _bubble_style("#FEE500", "#111111")
-PET_BUBBLE_STYLE = _bubble_style("#E3F2FD", "#111111")
-ERROR_BUBBLE_STYLE = _bubble_style("#FFEBEB", "#FF0000")
+# ── 메시지 포맷 상수 (스타일은 MARKDOWN_CSS + QSS가 담당) ──
+USER_MSG_FORMAT = "{text}"
+PET_MSG_FORMAT = "{text}"
+ERROR_MSG_FORMAT = "⚠️ {text}"
 
-# ── 사고 과정 HTML 템플릿 (말풍선 내부 인라인) ──
-THINKING_BLOCK_COLLAPSED = f'''
-<div style="margin: 0 10px 8px 10px; border: 1px solid #9BBDDA; border-radius: 10px; padding: 8px 12px;">
-<table width="100%" cellpadding="0" cellspacing="0"><tr>
-    <td width="22" style="color: #2A62A8; font-size: 13px;">🧠</td>
-    <td><a href="action:toggle_thinking" style="color: #1A4F9A; font-family: {FONT_FAMILY}; font-size: 11.5px; font-weight: bold; text-decoration: none;">사고 과정 보기</a></td>
-    <td align="right"><a href="action:toggle_thinking" style="color: #2A62A8; text-decoration: none; font-size: 11px;">▶</a></td>
-</tr></table>
-</div>
-'''
+# 유저 챗 버블 (카카오톡 느낌의 노란색 + 은은한 테두리)
+USER_BUBBLE_STYLE = _bubble_style("#FEF01B", "#383100", "#E5CD00")
 
-THINKING_BLOCK_EXPANDED = f'''
-<div style="margin: 0 10px 8px 10px; border: 1px solid #9BBDDA; border-radius: 10px; padding: 8px 12px;">
-<table width="100%" cellpadding="0" cellspacing="0"><tr>
-    <td width="22" style="color: #2A62A8; font-size: 13px;">🧠</td>
-    <td><a href="action:toggle_thinking" style="color: #1A4F9A; font-family: {FONT_FAMILY}; font-size: 11.5px; font-weight: bold; text-decoration: none;">사고 과정 닫기</a></td>
-    <td align="right"><a href="action:toggle_thinking" style="color: #2A62A8; text-decoration: none; font-size: 11px;">▼</a></td>
-</tr></table>
-<div style="border-top: 1px solid #9BBDDA; margin-top: 8px; padding-top: 8px; font-family: 'Courier New', monospace; font-size: 11.5px; color: #1E3A6E; line-height: 1.6; white-space: pre-wrap;">{{content}}</div>
-</div>
-'''
+# 기본 펫 버블 (회색조/파란조 + 은은한 테두리)
+PET_BUBBLE_STYLE = _bubble_style("#F0F4F8", "#2C3E50", "#D9E2EC")
+
+# 사고 과정(Thinking)과 답변을 하나의 말풍선 안에 담기 위한 QFrame 컨테이너 스타일
+PET_BUBBLE_STYLE_WITH_THINKING = """
+QFrame#thinking_bubble_frame {
+    background-color: #F0F4F8;
+    border-radius: 14px;
+    border: 1px solid #D9E2EC;
+}
+"""
+
+PET_BUBBLE_INNER_TEXT_STYLE = _bubble_style("transparent", "#2C3E50", "none")
+ERROR_BUBBLE_STYLE = _bubble_style("#FDEDED", "#E74C3C", "#F5C6CB")
 
 OPACITY_SLIDER_STYLE = """
 QSlider::groove:horizontal {

@@ -1,13 +1,11 @@
-from PySide6.QtWidgets import QFrame, QWidget, QTextEdit, QLabel, QPushButton, QHBoxLayout, QTextBrowser
+from PySide6.QtWidgets import QFrame, QWidget, QTextEdit, QLabel, QPushButton, QHBoxLayout, QTextBrowser, QVBoxLayout, QSizePolicy
 from PySide6.QtCore import Qt, Signal, QPoint, QRectF, QTimer, QUrl
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap, QCursor, QDesktopServices
 
 from app.chat_style import (
     IMAGE_REMOVE_BTN_STYLE,
     FONT_FAMILY,
-    PET_MSG_FORMAT,
-    THINKING_BLOCK_EXPANDED,
-    THINKING_BLOCK_COLLAPSED,
+    MARKDOWN_CSS,
     BUBBLE_MAX_HEIGHT,
 )
 
@@ -220,29 +218,159 @@ def fit_bubble_size(bubble: QTextBrowser, scroll_area_viewport, max_height: int 
 
     # 문서의 이상적인 너비 계산 (내용에 맞는 최소 너비)
     bubble.document().setTextWidth(-1)  # 제한 없이 자연 너비 계산
-    ideal_w = int(bubble.document().idealWidth()) + 20  # 여백 보정
+    ideal_w = int(bubble.document().idealWidth()) + 30  # 여백 보정 넉넉히
+
+    bubble_frame = bubble.property("bubble_frame")
+    if bubble_frame:
+        tw = bubble.property("thinking_widget")
+        if tw:
+            ideal_w = max(ideal_w, 180) # 사고과정 토글 버튼의 기본 너비 보장
 
     # 너비 결정: min(ideal, max_w), 최소 60px
     final_w = max(min(ideal_w, max_w), 60)
-    bubble.setFixedWidth(final_w)
+    
+    if bubble_frame:
+        # 겉 컨테이너(bubble_frame)를 고정시키고 내부(bubble)는 꽉 차도록 확장 허용
+        bubble_frame.setFixedWidth(final_w)
+        bubble.setMinimumWidth(10)
+        bubble.setMaximumWidth(final_w)
+    else:
+        bubble.setFixedWidth(final_w)
 
     # 높이 계산: 결정된 너비로 문서 재배치 후 높이 측정
-    bubble.document().setTextWidth(final_w)
+    # 내부 padding(좌우 각 12px)을 제외한 실제 텍스트 영역에 맞게 텍스트 너비를 세팅해야 조기 줄바꿈을 막을 수 있음
+    bubble.document().setTextWidth(final_w - 24)
     doc_height = int(bubble.document().size().height())
-    if doc_height > max_height:
+    
+    # QTextBrowser 내부에 padding: 10px 12px; 가 적용되어 있으므로
+    # 위아래 여백 총 20px을 높이에 더해주어야 내용물이 잘리지 않고 불필요한 스크롤바가 안 생깁니다.
+    needed_height = doc_height + 20
+
+    if needed_height > max_height:
         bubble.setFixedHeight(max_height)
     else:
-        bubble.setFixedHeight(max(doc_height, 30))
+        bubble.setFixedHeight(max(needed_height, 30))
 
 def render_thinking_html(answer_html_content: str, thinking_html_content: str, expanded: bool) -> str:
-    """사고 과정 토글 + 최종 답변을 하나의 말풍선 HTML로 조합합니다."""
-    if expanded:
-        thinking_section = THINKING_BLOCK_EXPANDED.format(content=thinking_html_content)
-    else:
-        thinking_section = THINKING_BLOCK_COLLAPSED
-        
-    combined_text = f"{thinking_section}<div style='margin-top: 4px;'>{answer_html_content}</div>"
-    return PET_MSG_FORMAT.format(text=combined_text)
+    """[DEPRECATED] ThinkingWidget 도입으로 대체 예정. 하위 호환성 유지용."""
+    combined = thinking_html_content + "<br>" + answer_html_content if thinking_html_content else answer_html_content
+    return combined
+
+
+class ThinkingWidget(QWidget):
+    """사고 과정 접기/폴기 토글을 제공하는 Qt 네이티브 위젯.
+    HTML 테이블 구조 대신 QPushButton과 QTextBrowser를 VBox으로 조립합니다.
+    """
+
+    def __init__(self, thinking_html: str, parent=None):
+        super().__init__(parent)
+        self._thinking_html = thinking_html
+        self._expanded = False
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self._toggle_btn = QPushButton("\U0001f9e0  사고 과정 보기  ▶")
+        self._toggle_btn.setCursor(Qt.PointingHandCursor)
+        self._toggle_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #DCF0FD;
+                color: #1A4F9A;
+                border: none;
+                border-bottom: 1px solid #B8D5E8;
+                font-size: 11px;
+                font-weight: bold;
+                padding: 7px 12px;
+                text-align: left;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                border-bottom-left-radius: 0px;
+                border-bottom-right-radius: 0px;
+            }
+            QPushButton:hover { background-color: #C8E4F7; }
+        """)
+        self._toggle_btn.clicked.connect(self._on_toggle)
+        layout.addWidget(self._toggle_btn)
+
+        self._content_browser = QTextBrowser()
+        self._content_browser.setOpenExternalLinks(False)
+        self._content_browser.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._content_browser.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._content_browser.setStyleSheet("""
+            QTextBrowser {
+                background-color: #D4EBFA;
+                border: none;
+                border-bottom: 1px solid #B8D5E8;
+                color: #1E3A6E;
+                font-size: 11.5px;
+                padding: 8px 12px;
+            }
+        """)
+        self._content_browser.document().setDefaultStyleSheet(
+            "body { font-family: 'Courier New', monospace; font-size: 11.5px; color: #1E3A6E; }"
+        )
+        self._content_browser.setHtml(thinking_html)
+        self._content_browser.setFixedHeight(0)
+        self._content_browser.hide()
+        layout.addWidget(self._content_browser)
+
+    def _on_toggle(self):
+        self._expanded = not self._expanded
+        if self._expanded:
+            self._toggle_btn.setText("\U0001f9e0  사고 과정 닫기  ▼")
+            self._content_browser.show()
+            doc_h = int(self._content_browser.document().size().height())
+            self._content_browser.setFixedHeight(min(doc_h + 10, 300))
+        else:
+            self._toggle_btn.setText("\U0001f9e0  사고 과정 보기  ▶")
+            self._content_browser.hide()
+            self._content_browser.setFixedHeight(0)
+
+    def update_thinking(self, thinking_html: str):
+        self._thinking_html = thinking_html
+        self._content_browser.setHtml(thinking_html)
+
+    def is_expanded(self) -> bool:
+        return self._expanded
+
+    def set_expanded(self, expanded: bool):
+        if expanded != self._expanded:
+            self._on_toggle()
+
+    def make_transparent(self):
+        """QFrame 래퍼와 통합될 때 호출. 토글 버튼과 내용을 부모 프레임에 녹아드는 스타일로 전환합니다."""
+        self._toggle_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(26, 79, 154, 0.15);
+                color: #0F3A7A;
+                border: none;
+                font-size: 11px;
+                font-weight: bold;
+                padding: 7px 12px;
+                text-align: left;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                border-bottom-left-radius: 0px;
+                border-bottom-right-radius: 0px;
+            }
+            QPushButton:hover { background-color: rgba(26, 79, 154, 0.25); }
+        """)
+        self._content_browser.setStyleSheet("""
+            QTextBrowser {
+                background-color: rgba(26, 79, 154, 0.12);
+                border: none;
+                color: #0F3A7A;
+                font-size: 11.5px;
+                padding: 8px 12px;
+            }
+        """)
+
+
+def apply_markdown_css(browser: QTextBrowser):
+    """QTextBrowser의 기본 스타일시트에 MARKDOWN_CSS를 주입합니다."""
+    browser.document().setDefaultStyleSheet(MARKDOWN_CSS)
 
 def scroll_to_bottom(scroll_area):
     QTimer.singleShot(50, lambda: scroll_area.verticalScrollBar().setValue(
