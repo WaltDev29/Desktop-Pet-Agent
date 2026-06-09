@@ -28,6 +28,7 @@ except ImportError:
     pass
 
 from .gateway_client import gateway_client
+from .workspace_mcp_process import start_workspace_mcp_server, stop_workspace_mcp_server
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def router_lifespan(app: APIRouter):
     logger.info("Starting gateway client in Router Lifespan...")
+    await asyncio.to_thread(start_workspace_mcp_server)
     
     # 게이트웨이에서 수신한 명령을 처리할 핸들러 등록
     gateway_client.set_handlers(
@@ -50,6 +52,7 @@ async def router_lifespan(app: APIRouter):
     yield
     logger.info("Shutting down gateway client...")
     await gateway_client.disconnect()
+    await asyncio.to_thread(stop_workspace_mcp_server)
 
 router = APIRouter(lifespan=router_lifespan)
 
