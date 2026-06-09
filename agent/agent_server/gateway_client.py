@@ -78,10 +78,11 @@ class GatewayClient:
             except Exception as e:
                 logger.error(f"Failed to clear access_token in auth.json: {e}")
 
-    def set_handlers(self, chat_handler, approve_handler, sync_handler=None):
+    def set_handlers(self, chat_handler, approve_handler, sync_handler=None, stop_handler=None):
         self.chat_handler = chat_handler
         self.approve_handler = approve_handler
         self.sync_handler = sync_handler
+        self.stop_handler = stop_handler
 
     async def connect(self):
         """정확히 3회 연결을 시도하고 실패 시 로컬 모드로 전환합니다."""
@@ -153,6 +154,9 @@ class GatewayClient:
                     elif msg_type in ("session_sync", "session_created", "session_deleted", "session_update", "history_res") and getattr(self, "sync_handler", None):
                         # Pydantic을 거치지 않고 raw data 통과 (단순 포워딩)
                         asyncio.create_task(self.sync_handler(msg_type, raw_payload))
+                        
+                    elif msg_type == "stop" and getattr(self, "stop_handler", None):
+                        asyncio.create_task(self.stop_handler(raw_payload))
                         
                     elif msg_type == "ping":
                         pong_msg = WsMessage(type="pong", payload=PingPongPayload())

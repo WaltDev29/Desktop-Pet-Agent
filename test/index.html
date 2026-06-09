@@ -346,6 +346,7 @@
         let currentMessageDiv = null;
         let thoughtLogDiv = null;
         let finalResponseDiv = null;
+        let isAgentBusy = false;
 
         // 에이전트 로그인 상태 확인
         async function checkStatus() {
@@ -760,8 +761,7 @@
         connectWebSocket();
 
         function resetSendButton() {
-            sendBtn.disabled = false;
-            sendBtn.innerText = '전송';
+            setAgentBusy(false);
         }
 
         fileInput.addEventListener('change', async (e) => {
@@ -853,14 +853,18 @@
         }
 
         function setAgentBusy(isBusy) {
-            sendBtn.disabled = isBusy;
+            isAgentBusy = isBusy;
             messageInput.disabled = isBusy;
             if (isBusy) {
-                sendBtn.innerHTML = '<span class="loader"></span> 진행중';
-                sendBtn.style.opacity = "0.7";
+                sendBtn.innerHTML = '중단 🚫';
+                sendBtn.style.backgroundColor = "#dc3545";
+                sendBtn.style.opacity = "1";
+                sendBtn.disabled = false;
             } else {
                 sendBtn.innerHTML = '전송';
+                sendBtn.style.backgroundColor = "#4a90e2";
                 sendBtn.style.opacity = "1";
+                sendBtn.disabled = false;
             }
         }
 
@@ -872,8 +876,7 @@
 
             appendMessage(approve ? "✅ 승인합니다." : "❌ 거절합니다.", "user");
 
-            sendBtn.disabled = true;
-            sendBtn.innerHTML = '<span class="loader"></span> 진행중';
+            setAgentBusy(true);
 
             ws.send(JSON.stringify({
                 type: "approval_response",
@@ -885,6 +888,17 @@
         }
 
         function sendMessage() {
+            if (isAgentBusy) {
+                if (!ws || ws.readyState !== WebSocket.OPEN) return;
+                if (currentSessionId) {
+                    ws.send(JSON.stringify({
+                        type: "stop",
+                        payload: { session_id: currentSessionId }
+                    }));
+                }
+                return;
+            }
+
             const text = messageInput.value.trim();
             if (!text && selectedImages.length === 0) return;
 
@@ -907,9 +921,6 @@
             const currentImages = [...selectedImages];
             selectedImages = [];
             renderPreviews();
-
-            sendBtn.disabled = true;
-            sendBtn.innerHTML = '<span class="loader"></span> 전송중';
 
             const msgId = crypto.randomUUID();
             window.sentMessageIds = window.sentMessageIds || new Set();
