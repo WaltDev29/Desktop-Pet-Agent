@@ -704,22 +704,59 @@ class ChatWindow(QWidget):
         self.chat_client.send_message(payload)
                 
     def render_history(self, history: list[dict]):
+        local_bubbles = self.current_session.bubbles[:]
+        
+        # 로컬 버퍼가 서버 히스토리보다 최신(또는 동기화됨)이라면 화면 덮어쓰기를 생략합니다.
+        # (사고 과정 위젯 등의 로컬 전용 UI 상태를 보존하기 위함)
+        if len(local_bubbles) >= len(history) and len(history) > 0:
+            return
+
         self._clear_bubble_widgets()
-        # 로컬 세션의 bubbles 버퍼 초기화 (서버 응답 데이터로 대체)
         self.current_session.bubbles.clear()
         
         if not history:
             self._add_bubble("이전 대화가 없습니다.", "pet")
             return
-        for m in history:
+
+        from app.chat_session import BubbleSnapshot
+
+        for i, m in enumerate(history):
             role = m.get("role", "pet")
-            text = m.get("message", "")
+            if role == "assistant":
+                role = "pet"
+                
+            text = m.get("message") or m.get("content", "")
             images = m.get("images", [])
             formatted_text = text
             for img in images:
                 formatted_text += f"\n\n![\uc774\ubbf8\uc9c0]({img})"
+                
             html_content = convert_markdown_to_html(formatted_text)
-            self._add_bubble(html_content, role, add_to_session=True)
+            
+            thinking_widget = None
+            snap_thinking_html = ""
+            snap_thinking_expanded = False
+            
+            # 서버 히스토리와 로컬 스냅샷을 순서대로 매칭하여 사고 과정(Thinking) 정보 복구
+            if i < len(local_bubbles) and local_bubbles[i].msg_type == role:
+                snap = local_bubbles[i]
+                if snap.thinking_html_content:
+                    from app.chat_gui import ThinkingWidget
+                    thinking_widget = ThinkingWidget(snap.thinking_html_content)
+                    if snap.thinking_expanded:
+                        thinking_widget.set_expanded(True)
+                    snap_thinking_html = snap.thinking_html_content
+                    snap_thinking_expanded = snap.thinking_expanded
+                    
+            bubble = self._add_bubble(html_content, role, add_to_session=False, thinking_widget=thinking_widget)
+            if thinking_widget:
+                bubble.setProperty("thinking_expanded", snap_thinking_expanded)
+                
+            new_snap = BubbleSnapshot(html=html_content, msg_type=role)
+            new_snap.thinking_html_content = snap_thinking_html
+            new_snap.thinking_expanded = snap_thinking_expanded
+            self.current_session.bubbles.append(new_snap)
+
         self.scrollToBottom()
         
     def set_agent_busy(self, is_busy: bool):

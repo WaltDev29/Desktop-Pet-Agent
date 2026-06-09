@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QPushButton, QGraphicsDropShadowEffect, QFrame
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QPushButton, QGraphicsDropShadowEffect, QFrame, QMessageBox
 )
 from PySide6.QtCore import Qt, QPoint
 from PySide6.QtGui import QColor
@@ -10,6 +10,7 @@ from app.chat_style import (
     get_settings_slider_style,
     DARK_THEME,
 )
+import requests
 
 class SettingsWindow(QWidget):
     def __init__(self, chat_window, pet_window=None):
@@ -79,6 +80,13 @@ class SettingsWindow(QWidget):
         layout.addWidget(self.chat_opacity_slider)
         layout.addWidget(self.pet_opacity_label)
         layout.addWidget(self.pet_opacity_slider)
+        
+        # 로그아웃 버튼
+        self.logout_btn = QPushButton("로그아웃")
+        self.logout_btn.setStyleSheet("background-color: #D32F2F; color: white; border-radius: 8px; font-size: 13px; font-weight: bold; padding: 8px 16px;")
+        self.logout_btn.clicked.connect(self._handle_logout)
+        layout.addWidget(self.logout_btn)
+        
         layout.addStretch()
 
         btn_layout = QHBoxLayout()
@@ -162,3 +170,18 @@ class SettingsWindow(QWidget):
     def mouseReleaseEvent(self, event):
         self._drag_start_cursor_pos = None
         self._drag_start_window_pos = None
+
+    def _handle_logout(self):
+        try:
+            response = requests.post("http://localhost:8001/api/logout", timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("status") == "success":
+                    QMessageBox.information(self, "로그아웃", "성공적으로 로그아웃 되었습니다.")
+                    self.close()
+                else:
+                    QMessageBox.warning(self, "로그아웃 실패", data.get("message", "알 수 없는 오류가 발생했습니다."))
+            else:
+                QMessageBox.warning(self, "로그아웃 실패", f"서버 오류: {response.status_code}")
+        except Exception as e:
+            QMessageBox.critical(self, "로그아웃 오류", f"로그아웃 요청 중 오류가 발생했습니다:\n{str(e)}")

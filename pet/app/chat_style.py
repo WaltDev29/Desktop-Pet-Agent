@@ -285,23 +285,24 @@ def _bubble_style(bg_color: str, text_color: str = "#2C3E50", border_color: str 
         padding: 10px 16px 10px 12px;
     }}
     QScrollBar:vertical {{
+        border: none;
         width: 6px;
-        background: transparent;
-        margin: 2px;
+        background: {bg_color};
+        margin: 0px;
     }}
     QScrollBar::handle:vertical {{
-        background: rgba(0, 0, 0, 0.2);
+        background: rgba(150, 150, 150, 0.5);
         min-height: 20px;
         border-radius: 3px;
     }}
     QScrollBar::handle:vertical:hover {{
-        background: rgba(0, 0, 0, 0.35);
+        background: rgba(150, 150, 150, 0.8);
     }}
-    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-        height: 0px;
-    }}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+    QScrollBar::up-arrow:vertical, QScrollBar::down-arrow:vertical,
     QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-        background: transparent;
+        border: none;
+        background: {bg_color};
     }}
     """
 
@@ -624,7 +625,6 @@ LIGHT_THEME = {
 
 def get_chat_scroll_area_style(theme: dict) -> str:
     bg = theme["scroll_bg"]
-    track = theme["scroll_bar_track"]
     handle = theme["scroll_bar_handle"]
     handle_hover = theme["scroll_bar_handle_hover"]
     return f"""
@@ -636,20 +636,24 @@ QWidget#chat_scroll_content {{
     background-color: {bg};
 }}
 QScrollBar:vertical {{
-    width: 8px;
-    background: {track};
-    border-radius: 4px;
+    border: none;
+    width: 6px;
+    background: {bg};
+    margin: 0px;
 }}
 QScrollBar::handle:vertical {{
     background: {handle};
-    border-radius: 4px;
+    border-radius: 3px;
     min-height: 20px;
 }}
 QScrollBar::handle:vertical:hover {{
     background: {handle_hover};
 }}
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-    height: 0px;
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+QScrollBar::up-arrow:vertical, QScrollBar::down-arrow:vertical,
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+    border: none;
+    background: {bg};
 }}
 """
 
@@ -785,10 +789,14 @@ QPushButton:hover {{
 
 
 def get_sidebar_scroll_style(theme: dict) -> str:
+    bg = theme["sidebar_bg"]
     return (
-        f"QScrollArea {{ background: transparent; border: none; }}"
-        f"QScrollBar:vertical {{ width: 4px; background: {theme['sidebar_scroll_bg']}; }}"
-        f"QScrollBar::handle:vertical {{ background: {theme['sidebar_scroll_handle']}; border-radius: 2px; }}"
+        f"QScrollArea {{ background: transparent; border: none; }}\n"
+        f"QScrollBar:vertical {{ border: none; width: 4px; background: {bg}; margin: 0px; }}\n"
+        f"QScrollBar::handle:vertical {{ background: {theme['sidebar_scroll_handle']}; border-radius: 2px; min-height: 20px; }}\n"
+        f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical, \n"
+        f"QScrollBar::up-arrow:vertical, QScrollBar::down-arrow:vertical, \n"
+        f"QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ border: none; background: {bg}; }}"
     )
 
 

@@ -256,12 +256,15 @@ def fit_bubble_size(bubble: QTextBrowser, scroll_area_viewport, max_height: int 
     
     # QTextBrowser 내부에 padding: 10px 12px; 가 적용되어 있으므로
     # 위아래 여백 총 20px을 높이에 더해주어야 내용물이 잘리지 않고 불필요한 스크롤바가 안 생깁니다.
-    needed_height = doc_height + 20
+    # 안전 여백으로 2px 추가
+    needed_height = doc_height + 22
 
     if needed_height > max_height:
         bubble.setFixedHeight(max_height)
+        bubble.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
     else:
         bubble.setFixedHeight(max(needed_height, 30))
+        bubble.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
 def render_thinking_html(answer_html_content: str, thinking_html_content: str, expanded: bool) -> str:
     """[DEPRECATED] ThinkingWidget 도입으로 대체 예정. 하위 호환성 유지용."""
@@ -320,23 +323,24 @@ class ThinkingWidget(QWidget):
                 padding: 8px 12px;
             }
             QScrollBar:vertical {
+                border: none;
                 width: 6px;
-                background: transparent;
-                margin: 2px;
+                background: #D4EBFA;
+                margin: 0px;
             }
             QScrollBar::handle:vertical {
-                background: rgba(30, 58, 110, 0.2);
-                border-radius: 3px;
+                background: rgba(30, 58, 110, 0.3);
                 min-height: 20px;
+                border-radius: 3px;
             }
             QScrollBar::handle:vertical:hover {
-                background: rgba(30, 58, 110, 0.4);
+                background: rgba(30, 58, 110, 0.5);
             }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                height: 0px;
-            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+            QScrollBar::up-arrow:vertical, QScrollBar::down-arrow:vertical,
             QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
-                background: transparent;
+                border: none;
+                background: #D4EBFA;
             }
         """)
         self._content_browser.document().setDefaultStyleSheet(
@@ -405,23 +409,24 @@ class ThinkingWidget(QWidget):
                 padding: 8px 12px;
             }
             QScrollBar:vertical {
+                border: none;
                 width: 6px;
-                background: transparent;
-                margin: 2px;
+                background: #D8EBF8;
+                margin: 0px;
             }
             QScrollBar::handle:vertical {
-                background: rgba(26, 79, 154, 0.2);
-                border-radius: 3px;
+                background: rgba(26, 79, 154, 0.3);
                 min-height: 20px;
+                border-radius: 3px;
             }
             QScrollBar::handle:vertical:hover {
-                background: rgba(26, 79, 154, 0.4);
+                background: rgba(26, 79, 154, 0.5);
             }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                height: 0px;
-            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+            QScrollBar::up-arrow:vertical, QScrollBar::down-arrow:vertical,
             QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
-                background: transparent;
+                border: none;
+                background: #D8EBF8;
             }
         """)
 
