@@ -537,3 +537,314 @@ QLabel#login_field_label {{
     font-weight: bold;
 }}
 """
+
+# ── 테마 팔레트 ──────────────────────────────────────────────────
+# QColor 호환을 위해 bubble_frame 배경은 r,g,b,a 정수 키로 분리 관리
+
+DARK_THEME = {
+    "name": "dark",
+    "scroll_bg": "#222222",
+    "scroll_bar_track": "rgba(255,255,255,15)",
+    "scroll_bar_handle": "rgba(255,255,255,150)",
+    "scroll_bar_handle_hover": "rgba(255,255,255,200)",
+    "input_bg": "#1E2A38",
+    "input_color": "#E0E0E0",
+    "input_border": "#2C3E50",
+    "input_focus_border": "#3498DB",
+    "sidebar_bg": "#1A1A1A",
+    "sidebar_border": "#333333",
+    "sidebar_header_color": "#AAAAAA",
+    "session_color": "#CCCCCC",
+    "session_hover_bg": "rgba(255,255,255,12)",
+    "session_hover_color": "#FFFFFF",
+    "session_active_bg": "rgba(41,121,176,180)",
+    "session_active_hover_bg": "rgba(41,121,176,220)",
+    "sidebar_new_chat_bg": "rgba(41,121,176,150)",
+    "sidebar_new_chat_border": "rgba(41,121,176,200)",
+    "sidebar_new_chat_hover_bg": "rgba(41,121,176,220)",
+    "sidebar_scroll_bg": "rgba(255,255,255,10)",
+    "sidebar_scroll_handle": "rgba(255,255,255,80)",
+    "settings_btn_bg": "#3A3A3A",
+    "settings_btn_hover_bg": "#505050",
+    "settings_btn_color": "#FFFFFF",
+    "toggle_btn_color": "#888888",
+    "toggle_btn_hover_bg": "rgba(255,255,255,15)",
+    "toggle_btn_hover_color": "#FFFFFF",
+    # BubbleFrame paintEvent용 — QColor(r,g,b,a)로 직접 사용
+    "bubble_frame_bg_r": 34,
+    "bubble_frame_bg_g": 34,
+    "bubble_frame_bg_b": 34,
+    "bubble_frame_bg_a": 245,
+    "bubble_frame_border": "#555555",
+    "new_chat_btn_bg": "#2979B0",
+    "new_chat_btn_hover_bg": "#1A5F8F",
+}
+
+LIGHT_THEME = {
+    "name": "light",
+    "scroll_bg": "#F2F2F2",
+    "scroll_bar_track": "rgba(0,0,0,10)",
+    "scroll_bar_handle": "rgba(0,0,0,100)",
+    "scroll_bar_handle_hover": "rgba(0,0,0,160)",
+    "input_bg": "#FFFFFF",
+    "input_color": "#1A1A1A",
+    "input_border": "#C8C8C8",
+    "input_focus_border": "#2979B0",
+    "sidebar_bg": "#E4E4E4",
+    "sidebar_border": "#D0D0D0",
+    "sidebar_header_color": "#666666",
+    "session_color": "#333333",
+    "session_hover_bg": "rgba(0,0,0,8)",
+    "session_hover_color": "#111111",
+    "session_active_bg": "rgba(41,121,176,200)",
+    "session_active_hover_bg": "rgba(41,121,176,240)",
+    "sidebar_new_chat_bg": "rgba(41,121,176,220)",
+    "sidebar_new_chat_border": "rgba(41,121,176,240)",
+    "sidebar_new_chat_hover_bg": "rgba(29,95,143,255)",
+    "sidebar_scroll_bg": "rgba(0,0,0,8)",
+    "sidebar_scroll_handle": "rgba(0,0,0,70)",
+    "settings_btn_bg": "#D0D0D0",
+    "settings_btn_hover_bg": "#BBBBBB",
+    "settings_btn_color": "#222222",
+    "toggle_btn_color": "#555555",
+    "toggle_btn_hover_bg": "rgba(0,0,0,12)",
+    "toggle_btn_hover_color": "#111111",
+    # BubbleFrame paintEvent용 — QColor(r,g,b,a)로 직접 사용
+    "bubble_frame_bg_r": 248,
+    "bubble_frame_bg_g": 248,
+    "bubble_frame_bg_b": 248,
+    "bubble_frame_bg_a": 250,
+    "bubble_frame_border": "#C8C8C8",
+    "new_chat_btn_bg": "#2979B0",
+    "new_chat_btn_hover_bg": "#1A5F8F",
+}
+
+
+# ── 테마 기반 스타일 생성 함수 ────────────────────────────────────
+
+def get_chat_scroll_area_style(theme: dict) -> str:
+    bg = theme["scroll_bg"]
+    track = theme["scroll_bar_track"]
+    handle = theme["scroll_bar_handle"]
+    handle_hover = theme["scroll_bar_handle_hover"]
+    return f"""
+QScrollArea {{
+    background-color: {bg};
+    border: none;
+}}
+QWidget#chat_scroll_content {{
+    background-color: {bg};
+}}
+QScrollBar:vertical {{
+    width: 8px;
+    background: {track};
+    border-radius: 4px;
+}}
+QScrollBar::handle:vertical {{
+    background: {handle};
+    border-radius: 4px;
+    min-height: 20px;
+}}
+QScrollBar::handle:vertical:hover {{
+    background: {handle_hover};
+}}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+    height: 0px;
+}}
+"""
+
+
+def get_input_field_style(theme: dict) -> str:
+    return f"""
+QTextEdit {{
+    background-color: {theme["input_bg"]};
+    color: {theme["input_color"]};
+    border-radius: 15px;
+    border: 1px solid {theme["input_border"]};
+    padding: 8px 12px;
+    font-size: 13px;
+}}
+QTextEdit:focus {{
+    border: 1px solid {theme["input_focus_border"]};
+}}
+"""
+
+
+def get_sidebar_style(theme: dict) -> str:
+    return f"""
+QWidget#sidebar_panel {{
+    background-color: {theme["sidebar_bg"]};
+    border-right: 1px solid {theme["sidebar_border"]};
+    border-radius: 0px;
+}}
+QLabel#sidebar_header {{
+    color: {theme["sidebar_header_color"]};
+    font-family: {FONT_FAMILY};
+    font-size: 11px;
+    font-weight: bold;
+    padding: 4px 8px;
+    letter-spacing: 1px;
+}}
+"""
+
+
+def get_session_item_style(theme: dict) -> str:
+    return f"""
+QPushButton {{
+    background-color: transparent;
+    color: {theme["session_color"]};
+    border: none;
+    border-radius: 8px;
+    font-family: {FONT_FAMILY};
+    font-size: 12px;
+    font-weight: normal;
+    text-align: left;
+    padding: 8px 10px;
+    margin: 1px 4px;
+}}
+QPushButton:hover {{
+    background-color: {theme["session_hover_bg"]};
+    color: {theme["session_hover_color"]};
+}}
+"""
+
+
+def get_session_item_active_style(theme: dict) -> str:
+    return f"""
+QPushButton {{
+    background-color: {theme["session_active_bg"]};
+    color: #FFFFFF;
+    border: none;
+    border-radius: 8px;
+    font-family: {FONT_FAMILY};
+    font-size: 12px;
+    font-weight: bold;
+    text-align: left;
+    padding: 8px 10px;
+    margin: 1px 4px;
+}}
+QPushButton:hover {{
+    background-color: {theme["session_active_hover_bg"]};
+}}
+"""
+
+
+def get_sidebar_new_chat_btn_style(theme: dict) -> str:
+    return f"""
+QPushButton {{
+    background-color: {theme["sidebar_new_chat_bg"]};
+    color: #FFFFFF;
+    border: 1px solid {theme["sidebar_new_chat_border"]};
+    border-radius: 10px;
+    font-family: {FONT_FAMILY};
+    font-weight: bold;
+    font-size: 12px;
+    padding: 7px 10px;
+    margin: 4px 6px;
+}}
+QPushButton:hover {{
+    background-color: {theme["sidebar_new_chat_hover_bg"]};
+}}
+"""
+
+
+def get_settings_btn_style(theme: dict) -> str:
+    return f"""
+QPushButton {{
+    background-color: {theme["settings_btn_bg"]};
+    color: {theme["settings_btn_color"]};
+    border-radius: 8px;
+    font-weight: bold;
+    font-size: 13px;
+    padding: 10px 16px;
+}}
+QPushButton:hover {{
+    background-color: {theme["settings_btn_hover_bg"]};
+}}
+"""
+
+
+def get_sidebar_toggle_btn_style(theme: dict) -> str:
+    return f"""
+QPushButton {{
+    background-color: transparent;
+    color: {theme["toggle_btn_color"]};
+    border: none;
+    font-size: 18px;
+    font-weight: bold;
+    padding: 4px 6px;
+    border-radius: 8px;
+    min-width: 28px;
+    max-width: 28px;
+}}
+QPushButton:hover {{
+    background-color: {theme["toggle_btn_hover_bg"]};
+    color: {theme["toggle_btn_hover_color"]};
+}}
+"""
+
+
+def get_sidebar_scroll_style(theme: dict) -> str:
+    return (
+        f"QScrollArea {{ background: transparent; border: none; }}"
+        f"QScrollBar:vertical {{ width: 4px; background: {theme['sidebar_scroll_bg']}; }}"
+        f"QScrollBar::handle:vertical {{ background: {theme['sidebar_scroll_handle']}; border-radius: 2px; }}"
+    )
+
+
+def get_settings_window_style(theme: dict) -> str:
+    is_dark = theme["name"] == "dark"
+    container_bg = "rgba(38, 38, 38, 245)" if is_dark else "rgba(252, 252, 252, 248)"
+    border_color = "#555555" if is_dark else "#D8D8D8"
+    label_color = "#CCCCCC" if is_dark else "#444444"
+    return f"""
+QFrame#settings_container {{
+    background-color: {container_bg};
+    border: 2px solid {border_color};
+    border-radius: 15px;
+}}
+QLabel {{
+    color: {label_color};
+    font-family: {FONT_FAMILY};
+    font-size: 13px;
+    font-weight: bold;
+}}
+"""
+
+
+def get_settings_label_style(theme: dict) -> str:
+    is_dark = theme["name"] == "dark"
+    color = "#AAAAAA" if is_dark else "#555555"
+    return f"""
+QLabel {{
+    color: {color};
+    font-family: {FONT_FAMILY};
+    font-size: 11px;
+    font-weight: bold;
+}}
+"""
+
+
+def get_settings_slider_style(theme: dict) -> str:
+    is_dark = theme["name"] == "dark"
+    groove = "#555555" if is_dark else "#D0D0D0"
+    handle = "#5cb85c"
+    handle_hover = "#4cae4c"
+    return f"""
+QSlider::groove:horizontal {{
+    background: {groove};
+    height: 4px;
+    border-radius: 2px;
+}}
+QSlider::handle:horizontal {{
+    background: {handle};
+    width: 16px;
+    height: 16px;
+    border-radius: 8px;
+    margin: -6px 0;
+}}
+QSlider::handle:horizontal:hover {{
+    background: {handle_hover};
+}}
+"""
+

@@ -65,6 +65,18 @@ class BubbleFrame(QFrame):
         super().__init__(parent)
         self._drag_active = False
         self._press_pos = None
+        self._bg_color = QColor(34, 34, 34, 245)
+        self._border_color = QColor("#444444")
+
+    def set_theme(self, theme: dict):
+        self._bg_color = QColor(
+            theme["bubble_frame_bg_r"],
+            theme["bubble_frame_bg_g"],
+            theme["bubble_frame_bg_b"],
+            theme["bubble_frame_bg_a"],
+        )
+        self._border_color = QColor(theme["bubble_frame_border"])
+        self.update()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -130,10 +142,10 @@ class BubbleFrame(QFrame):
         path.closeSubpath()
         
         # 말풍선 내부 채우기 (약간의 투명도 포함)
-        painter.fillPath(path, QColor(34, 34, 34, 245))
+        painter.fillPath(path, self._bg_color)
 
         # 테두리 그리기
-        pen = QPen(QColor("#444444"))
+        pen = QPen(self._border_color)
         pen.setWidth(2)
         painter.setPen(pen)
         painter.drawPath(path)

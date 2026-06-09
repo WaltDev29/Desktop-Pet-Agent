@@ -45,6 +45,17 @@ from app.chat_style import (
     PET_BUBBLE_INNER_TEXT_STYLE,
     ERROR_BUBBLE_STYLE,
     CHAT_SCROLL_AREA_STYLE,
+    DARK_THEME,
+    LIGHT_THEME,
+    get_chat_scroll_area_style,
+    get_input_field_style,
+    get_sidebar_style,
+    get_session_item_style,
+    get_session_item_active_style,
+    get_sidebar_new_chat_btn_style,
+    get_settings_btn_style,
+    get_sidebar_toggle_btn_style,
+    get_sidebar_scroll_style,
 )
 
 from app.chat_network import ChatClient
@@ -105,6 +116,7 @@ class ChatWindow(QWidget):
         
         # ── 로컬 세션 상태 로드 (낙관적 UI) ────────────────────────
         self.settings = QSettings("PetAgent", "ChatApp")
+        self._current_theme = DARK_THEME
         saved_session_ids = self.settings.value("agent_sessions_list", [])
         saved_session_titles_json = self.settings.value("agent_session_titles", "{}")
         try:
@@ -136,7 +148,7 @@ class ChatWindow(QWidget):
         self.chat_scroll_area.setWidgetResizable(True)
         self.chat_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.chat_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.chat_scroll_area.setStyleSheet(CHAT_SCROLL_AREA_STYLE)
+        self.chat_scroll_area.setStyleSheet(get_chat_scroll_area_style(self._current_theme))
 
         self.chat_scroll_content = QWidget()
         self.chat_scroll_content.setObjectName("chat_scroll_content")
@@ -170,7 +182,7 @@ class ChatWindow(QWidget):
         top_btn_layout.setContentsMargins(0, 0, 0, 5)
 
         self.sidebar_toggle_btn = QPushButton("☰")
-        self.sidebar_toggle_btn.setStyleSheet(SIDEBAR_TOGGLE_BTN_STYLE)
+        self.sidebar_toggle_btn.setStyleSheet(get_sidebar_toggle_btn_style(self._current_theme))
         self.sidebar_toggle_btn.setToolTip("채팅 목록 열기/닫기")
         self.sidebar_toggle_btn.clicked.connect(self._toggle_sidebar)
         
@@ -179,7 +191,7 @@ class ChatWindow(QWidget):
         self.new_chat_btn.clicked.connect(self.prepare_new_chat)
         
         self.settings_btn = QPushButton("⚙️ 설정")
-        self.settings_btn.setStyleSheet(SETTINGS_BTN_STYLE)
+        self.settings_btn.setStyleSheet(get_settings_btn_style(self._current_theme))
         self.settings_btn.clicked.connect(self.open_settings)
         
         top_btn_layout.addWidget(self.sidebar_toggle_btn)
@@ -187,7 +199,7 @@ class ChatWindow(QWidget):
 
         self.input_field = ChatInputField()
         self.input_field.setPlaceholderText("무엇을 도와드릴까요?")
-        self.input_field.setStyleSheet(INPUT_FIELD_STYLE)
+        self.input_field.setStyleSheet(get_input_field_style(self._current_theme))
         self.input_field.returnPressed.connect(self.send_message)
 
         # ── 이미지 미리보기 영역 ──────────────────────────────
@@ -283,6 +295,7 @@ class ChatWindow(QWidget):
         
 
         self.handler = ChatResponseHandler(self)
+        self.apply_theme("dark")
 
     def attach_image(self):
         """파일 선택 다이얼로그로 이미지를 첨부합니다."""
@@ -413,7 +426,7 @@ class ChatWindow(QWidget):
 
         panel = QWidget()
         panel.setObjectName("sidebar_panel")
-        panel.setStyleSheet(SIDEBAR_STYLE)
+        panel.setStyleSheet(get_sidebar_style(self._current_theme))
         panel.setFixedWidth(SIDEBAR_WIDTH)
         panel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
 
@@ -434,11 +447,7 @@ class ChatWindow(QWidget):
         self.session_list_scroll.setWidgetResizable(True)
         self.session_list_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.session_list_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.session_list_scroll.setStyleSheet(
-            "QScrollArea { background: transparent; border: none; }"
-            "QScrollBar:vertical { width: 4px; background: rgba(255,255,255,10); }"
-            "QScrollBar::handle:vertical { background: rgba(255,255,255,80); border-radius: 2px; }"
-        )
+        self.session_list_scroll.setStyleSheet(get_sidebar_scroll_style(self._current_theme))
 
         self.session_list_content = QWidget()
         self.session_list_content.setStyleSheet("background: transparent;")
@@ -540,7 +549,7 @@ class ChatWindow(QWidget):
         row_layout.setSpacing(2)
 
         btn = QPushButton(f"💬 {session.title}")
-        btn.setStyleSheet(SESSION_ITEM_STYLE)
+        btn.setStyleSheet(get_session_item_style(self._current_theme))
         btn.setToolTip(session.title)
         btn.clicked.connect(lambda checked=False, s=session: self._on_session_clicked(s))
 
@@ -589,9 +598,9 @@ class ChatWindow(QWidget):
         for item in self._session_item_btns:
             s, btn = item[0], item[1]
             if s is self.current_session:
-                btn.setStyleSheet(SESSION_ITEM_ACTIVE_STYLE)
+                btn.setStyleSheet(get_session_item_active_style(self._current_theme))
             else:
-                btn.setStyleSheet(SESSION_ITEM_STYLE)
+                btn.setStyleSheet(get_session_item_style(self._current_theme))
 
     def _on_session_clicked(self, session: ChatSession):
         """사이드바 세션 항목 클릭 시 해당 세션으로 전환합니다."""
@@ -1000,6 +1009,46 @@ class ChatWindow(QWidget):
         else:
             self._drag_start_cursor_pos = None
             self._drag_start_window_pos = None
+
+    def apply_theme(self, theme_name: str):
+        """다크/화이트 테마를 채팅창 전체에 즉시 적용합니다."""
+        self._current_theme = DARK_THEME if theme_name == "dark" else LIGHT_THEME
+        theme = self._current_theme
+        is_dark = theme["name"] == "dark"
+
+        self.chat_scroll_area.setStyleSheet(get_chat_scroll_area_style(theme))
+        self.chat_scroll_content.setStyleSheet(f"background-color: {theme['scroll_bg']};")
+        self.input_field.setStyleSheet(get_input_field_style(theme))
+        self.sidebar_toggle_btn.setStyleSheet(get_sidebar_toggle_btn_style(theme))
+        self.settings_btn.setStyleSheet(get_settings_btn_style(theme))
+        self.new_chat_btn.setStyleSheet(get_sidebar_new_chat_btn_style(theme))
+        self.sidebar_panel.setStyleSheet(get_sidebar_style(theme))
+        self.session_list_scroll.setStyleSheet(get_sidebar_scroll_style(theme))
+
+        attach_color = "#E0E0E0" if is_dark else "#FFFFFF"
+        attach_text = "#333333"
+        self.attach_btn.setStyleSheet(f"""
+QPushButton {{
+    background-color: {attach_color};
+    color: {attach_text};
+    border-radius: 8px;
+    font-weight: bold;
+    font-size: 12px;
+    padding: 6px 12px;
+    border: 1px solid {'#3A3A3A' if is_dark else '#C8C8C8'};
+}}
+QPushButton:hover {{ background-color: {'#D0D0D0' if is_dark else '#EFEFEF'}; }}
+QPushButton:disabled {{ background-color: {'#2A2A2A' if is_dark else '#F5F5F5'}; color: #AAAAAA; }}
+""")
+
+        self.container.set_theme(theme)
+        self._update_session_highlight()
+
+        # 설정창이 열려 있으면 함께 테마 갱신
+        if hasattr(self, "settings_window") and self.settings_window.isVisible():
+            self.settings_window.update_theme(theme)
+
+        self.update()
 
     def open_settings(self):
         if not hasattr(self, 'settings_window') or not self.settings_window.isVisible():
