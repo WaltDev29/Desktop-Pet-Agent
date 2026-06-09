@@ -24,7 +24,7 @@ MessageType = Literal[
     "register", "status", "token", "log", "approval_request", 
     "approval_response", "done", "chat", "ping", "pong", "error",
     "session_sync", "session_created", "session_deleted", "session_update",
-    "get_history", "history_res"
+    "get_history", "history_res", "stop"
 ]
 
 class WsMessage(BaseModel):
@@ -96,6 +96,10 @@ class ChatPayload(SessionPayload):
 
 class PingPongPayload(ConnectionPayload):
     """하트비트용 페이로드 (추가 필드 없음)"""
+    pass
+
+class StopPayload(SessionPayload):
+    """실행 중단 요청 페이로드"""
     pass
 
 

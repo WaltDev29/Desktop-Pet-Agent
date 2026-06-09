@@ -51,7 +51,8 @@ async def router_lifespan(app: APIRouter):
     gateway_client.set_handlers(
         chat_handler=handle_gateway_chat,
         approve_handler=handle_gateway_approve,
-        sync_handler=handle_gateway_sync
+        sync_handler=handle_gateway_sync,
+        stop_handler=handle_gateway_stop
     )
     
     # 백그라운드 연결 시작 (자동 재시도 루프 포함)
@@ -199,6 +200,9 @@ async def _get_or_create_agent():
 
 # 세션 리스트 캐싱 (Gateway에서 받은 최신 상태 유지)
 cached_sessions = []
+
+# 실행 중인 에이전트 태스크 추적 (취소용)
+active_agent_tasks = {}
 
 # 세션별 실행 락 (순차 처리를 보장)
 session_locks = {}
@@ -408,6 +412,10 @@ async def execute_agent(session_id: str, state=None, command=None):
             done_payload = DonePayload(final_message=final_text, message_id=current_msg_id, session_id=session_id)
             await broadcast_event(WsMessage(type="done", payload=done_payload))
 
+    except asyncio.CancelledError:
+        logger.info(f"[Agent] 실행 취소됨. session_id={session_id}")
+        error_payload = LogPayload(status="error", message="⚠️ 사용자에 의해 작업이 중단되었습니다.", session_id=session_id)
+        await broadcast_event(WsMessage(type="log", payload=error_payload))
     except Exception as e:
         import traceback
         trace = traceback.format_exc()
@@ -456,7 +464,12 @@ async def handle_gateway_chat(payload: ChatPayload):
                 existing_images = current_state.values.get("uploaded_images", []) if current_state.values else []
                 
                 state = await _initial_state(payload, session_id, existing_images, is_new_session=is_new_session)
-                await execute_agent(session_id, state=state)
+                agent_task = asyncio.create_task(execute_agent(session_id, state=state))
+                active_agent_tasks[session_id] = agent_task
+                try:
+                    await agent_task
+                finally:
+                    active_agent_tasks.pop(session_id, None)
             finally:
                 # 상태 동기화: 종료
                 ready_msg = WsMessage(type="status", payload={"status": "ready", "session_id": session_id})
@@ -472,7 +485,12 @@ async def handle_gateway_approve(payload: ApprovalResponsePayload):
     # 게이트웨이(앱)에서 온 승인 여부를 로컬 UI에도 표시 (동기화)
     await local_manager.broadcast(WsMessage(type="approval_response", payload=payload))
     
-    await execute_agent(session_id, command=Command(resume=payload.approve))
+    agent_task = asyncio.create_task(execute_agent(session_id, command=Command(resume=payload.approve)))
+    active_agent_tasks[session_id] = agent_task
+    try:
+        await agent_task
+    finally:
+        active_agent_tasks.pop(session_id, None)
 
 async def handle_gateway_sync(msg_type: str, payload: dict):
     """게이트웨이로부터 받은 세션 동기화 이벤트를 로컬 UI로 전달합니다."""
@@ -510,6 +528,13 @@ async def handle_gateway_sync(msg_type: str, payload: dict):
     # WsMessage(type=msg_type, payload=payload)를 생성하여 브로드캐스트
     # entity.py의 WsMessage 규격을 따르되 payload는 raw dict를 허용함
     await local_manager.broadcast(WsMessage(type=msg_type, payload=payload))
+
+async def handle_gateway_stop(payload: dict):
+    """게이트웨이로부터 중단 요청을 수신했을 때 에이전트를 중단합니다."""
+    session_id = payload.get("session_id")
+    if session_id and session_id in active_agent_tasks:
+        logger.info(f"[GatewayHandler] 중단 요청 수신: session_id={session_id}")
+        active_agent_tasks[session_id].cancel()
 
 
 # ==========================================
@@ -569,7 +594,12 @@ async def websocket_endpoint(websocket: WebSocket):
                                             
                                         state = await _initial_state(payload_obj, sid, 
                                                                    agent_state.values.get("uploaded_images", []) if agent_state.values else [], is_new_session=is_new_session)
-                                        await execute_agent(sid, state=state)
+                                        agent_task = asyncio.create_task(execute_agent(sid, state=state))
+                                        active_agent_tasks[sid] = agent_task
+                                        try:
+                                            await agent_task
+                                        finally:
+                                            active_agent_tasks.pop(sid, None)
                                     else:
                                         await gateway_client.send_message(msg_obj)
                                 else:
@@ -594,7 +624,12 @@ async def websocket_endpoint(websocket: WebSocket):
                                              
                                          state = await _initial_state(payload_obj, sid, 
                                                                     agent_state.values.get("uploaded_images", []) if agent_state.values else [], is_new_session=is_new_session)
-                                         await execute_agent(sid, state=state)
+                                         agent_task = asyncio.create_task(execute_agent(sid, state=state))
+                                         active_agent_tasks[sid] = agent_task
+                                         try:
+                                             await agent_task
+                                         finally:
+                                             active_agent_tasks.pop(sid, None)
                             finally:
                                 # 실행 종료 알림 (모든 기기 버튼 활성화용)
                                 ready_msg = WsMessage(type="status", payload={"status": "ready", "session_id": sid})
@@ -615,7 +650,19 @@ async def websocket_endpoint(websocket: WebSocket):
                         await gateway_client.send_message(msg)
                     else:
                         # [로컬 모드] 직접 처리
-                        await execute_agent(session_id, command=Command(resume=app_payload.approve))
+                        agent_task = asyncio.create_task(execute_agent(session_id, command=Command(resume=app_payload.approve)))
+                        active_agent_tasks[session_id] = agent_task
+                        try:
+                            await agent_task
+                        finally:
+                            active_agent_tasks.pop(session_id, None)
+                
+                elif msg.type == "stop":
+                    raw_data = json.loads(raw_msg)
+                    session_id = raw_data.get("payload", {}).get("session_id")
+                    if session_id and session_id in active_agent_tasks:
+                        logger.info(f"[WebSocket] 중단 요청 수신: session_id={session_id}")
+                        active_agent_tasks[session_id].cancel()
                 
                 elif msg.type in ["session_created", "session_deleted", "session_update", "get_history"]:
                     if not gateway_client.is_local_mode:
