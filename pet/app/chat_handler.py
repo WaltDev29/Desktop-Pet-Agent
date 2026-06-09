@@ -64,10 +64,9 @@ class ChatResponseHandler:
                 else:
                     self.window._thinking_logs.append(f"[⚙️ {node_name} 동작 중...]")
                     thinking_content = "\n".join(self.window._thinking_logs)
-                    self.window._update_bubble(
-                        self.window._current_response_index,
-                        convert_markdown_to_html(f"```text\n{thinking_content}\n```")
-                    )
+                    thinking_html = convert_markdown_to_html(thinking_content)
+                    self._ensure_thinking_widget(thinking_html)
+                    self.window._update_bubble(self.window._current_response_index, "생각 중...")
                 self.window.scrollToBottom()
 
             elif status == "tool_start":
@@ -85,10 +84,9 @@ class ChatResponseHandler:
 
                 self.window._thinking_logs.append(log_entry)
                 thinking_content = "\n".join(self.window._thinking_logs)
-                self.window._update_bubble(
-                    self.window._current_response_index,
-                    convert_markdown_to_html(f"```text\n{thinking_content}\n```")
-                )
+                thinking_html = convert_markdown_to_html(thinking_content)
+                self._ensure_thinking_widget(thinking_html)
+                self.window._update_bubble(self.window._current_response_index, "생각 중...")
                 self.window.scrollToBottom()
 
         elif msg_type == "token":
@@ -109,10 +107,15 @@ class ChatResponseHandler:
             else:
                 self.window._thinking_stream_buffer += chunk
                 thinking_content = "\n".join(self.window._thinking_logs) + self.window._thinking_stream_buffer
-                self.window._update_bubble(
-                    self.window._current_response_index,
-                    convert_markdown_to_html(f"```text\n{thinking_content}\n```")
-                )
+                thinking_html = convert_markdown_to_html(thinking_content)
+                self._ensure_thinking_widget(thinking_html)
+                
+                idx = self.window._current_response_index
+                if idx is not None and idx < len(self.window.bubble_widgets):
+                    tw = self.window.bubble_widgets[idx].property("thinking_widget")
+                    if tw and not tw.is_expanded():
+                        tw.set_expanded(True)
+
             self.window.scrollToBottom()
 
         elif msg_type == "done":
@@ -133,6 +136,11 @@ class ChatResponseHandler:
                     thinking_content = "\n".join(self.window._thinking_logs)
                     thinking_html = convert_markdown_to_html(thinking_content)
                     self._ensure_thinking_widget(thinking_html)
+                    
+                    tw = bubble.property("thinking_widget")
+                    if tw:
+                        tw.set_expanded(False)
+
                     self.window._update_bubble_thinking_properties(
                         self.window._current_response_index, html_reply, thinking_html, False
                     )
@@ -229,19 +237,19 @@ class ChatResponseHandler:
         if tw is None and thinking_html:
             tw = ThinkingWidget(thinking_html)
             tw.make_transparent()
-            
+
             bubble_frame = bubble.property("bubble_frame")
             if bubble_frame:
                 layout = bubble_frame.layout()
-                # bubble 텍스트(인덱스 0) 위쪽에 삽입하기 위해 0번에 넣음 (기존 bubble은 밀려남)
                 layout.insertWidget(0, tw)
             else:
-                # Fallback
                 container = bubble.property("container_widget")
                 if container:
                     layout = container.layout()
                     layout.insertWidget(layout.count() - 1, tw)
-                    
+
             bubble.setProperty("thinking_widget", tw)
+            fit_bubble_size(bubble, self.window.chat_scroll_area.viewport())
         elif tw is not None and thinking_html:
             tw.update_thinking(thinking_html)
+            fit_bubble_size(bubble, self.window.chat_scroll_area.viewport())

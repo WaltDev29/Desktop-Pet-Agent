@@ -307,6 +307,25 @@ class ThinkingWidget(QWidget):
                 font-size: 11.5px;
                 padding: 8px 12px;
             }
+            QScrollBar:vertical {
+                width: 6px;
+                background: transparent;
+                margin: 2px;
+            }
+            QScrollBar::handle:vertical {
+                background: rgba(30, 58, 110, 0.2);
+                border-radius: 3px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: rgba(30, 58, 110, 0.4);
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: transparent;
+            }
         """)
         self._content_browser.document().setDefaultStyleSheet(
             "body { font-family: 'Courier New', monospace; font-size: 11.5px; color: #1E3A6E; }"
@@ -331,6 +350,12 @@ class ThinkingWidget(QWidget):
     def update_thinking(self, thinking_html: str):
         self._thinking_html = thinking_html
         self._content_browser.setHtml(thinking_html)
+        if self._expanded:
+            doc_h = int(self._content_browser.document().size().height())
+            self._content_browser.setFixedHeight(min(doc_h + 10, 300))
+            QTimer.singleShot(50, lambda: self._content_browser.verticalScrollBar().setValue(
+                self._content_browser.verticalScrollBar().maximum()
+            ))
 
     def is_expanded(self) -> bool:
         return self._expanded
@@ -340,30 +365,51 @@ class ThinkingWidget(QWidget):
             self._on_toggle()
 
     def make_transparent(self):
-        """QFrame 래퍼와 통합될 때 호출. 토글 버튼과 내용을 부모 프레임에 녹아드는 스타일로 전환합니다."""
+        """QFrame 래퍼와 통합될 때 호출. bubble_frame 배경과 어울리는 단색 스타일로 전환합니다."""
         self._toggle_btn.setStyleSheet("""
             QPushButton {
-                background-color: rgba(26, 79, 154, 0.15);
-                color: #0F3A7A;
+                background-color: #E4EEF8;
+                color: #1A4F9A;
                 border: none;
+                border-bottom: 1px solid #C5D8ED;
                 font-size: 11px;
                 font-weight: bold;
                 padding: 7px 12px;
                 text-align: left;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
+                border-top-left-radius: 14px;
+                border-top-right-radius: 14px;
                 border-bottom-left-radius: 0px;
                 border-bottom-right-radius: 0px;
             }
-            QPushButton:hover { background-color: rgba(26, 79, 154, 0.25); }
+            QPushButton:hover { background-color: #D5E6F5; }
         """)
         self._content_browser.setStyleSheet("""
             QTextBrowser {
-                background-color: rgba(26, 79, 154, 0.12);
+                background-color: #D8EBF8;
                 border: none;
+                border-bottom: 1px solid #C5D8ED;
                 color: #0F3A7A;
                 font-size: 11.5px;
                 padding: 8px 12px;
+            }
+            QScrollBar:vertical {
+                width: 6px;
+                background: transparent;
+                margin: 2px;
+            }
+            QScrollBar::handle:vertical {
+                background: rgba(26, 79, 154, 0.2);
+                border-radius: 3px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: rgba(26, 79, 154, 0.4);
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: transparent;
             }
         """)
 
