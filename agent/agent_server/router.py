@@ -38,6 +38,13 @@ logger = logging.getLogger(__name__)
 async def router_lifespan(app: APIRouter):
     logger.info("Starting gateway client in Router Lifespan...")
     
+    # 에이전트 및 MCP 도구 초기 로드 (서버 시작 시점, 백그라운드)
+    try:
+        logger.info("Initializing Agent and MCP tools on startup in background...")
+        asyncio.create_task(_get_or_create_agent())
+    except Exception as e:
+        logger.error(f"Failed to start Agent initialization on startup: {e}")
+        
     # 게이트웨이에서 수신한 명령을 처리할 핸들러 등록
     gateway_client.set_handlers(
         chat_handler=handle_gateway_chat,
@@ -177,13 +184,15 @@ async def login_to_gateway(req: LoginRequest):
 # 에이전트 인스턴스 관리
 # ==========================================
 _agent = None
+_agent_lock = asyncio.Lock()
 
 async def _get_or_create_agent():
     global _agent
-    if _agent is None:
-        from graph import create_agent
-        _agent = await create_agent()
-    return _agent
+    async with _agent_lock:
+        if _agent is None:
+            from graph import create_agent
+            _agent = await create_agent()
+        return _agent
 
 # 세션 리스트 캐싱 (Gateway에서 받은 최신 상태 유지)
 cached_sessions = []
