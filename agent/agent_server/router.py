@@ -28,6 +28,7 @@ except ImportError:
     pass
 
 from .gateway_client import gateway_client
+from .workspace_mcp_process import start_workspace_mcp_server, stop_workspace_mcp_server
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def router_lifespan(app: APIRouter):
     logger.info("Starting gateway client in Router Lifespan...")
+    await asyncio.to_thread(start_workspace_mcp_server)
     
     # 에이전트 및 MCP 도구 초기 로드 (서버 시작 시점, 백그라운드)
     try:
@@ -44,7 +46,7 @@ async def router_lifespan(app: APIRouter):
         asyncio.create_task(_get_or_create_agent())
     except Exception as e:
         logger.error(f"Failed to start Agent initialization on startup: {e}")
-        
+
     # 게이트웨이에서 수신한 명령을 처리할 핸들러 등록
     gateway_client.set_handlers(
         chat_handler=handle_gateway_chat,
@@ -57,6 +59,7 @@ async def router_lifespan(app: APIRouter):
     yield
     logger.info("Shutting down gateway client...")
     await gateway_client.disconnect()
+    await asyncio.to_thread(stop_workspace_mcp_server)
 
 router = APIRouter(lifespan=router_lifespan)
 

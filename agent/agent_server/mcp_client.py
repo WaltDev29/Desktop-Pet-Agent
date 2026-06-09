@@ -163,10 +163,15 @@ async def _normalize_mcp_config(mcp_config: dict) -> dict:
             "transport": transport,
         }
 
-        if transport == "sse":
+        if name == "workspace-mcp" and transport == "stdio":
+            env = raw_cfg.get("env") or {}
+            port = env.get("PORT") or env.get("WORKSPACE_MCP_PORT") or "8003"
+            normalized["transport"] = "streamable_http"
+            normalized["url"] = raw_cfg.get("url") or f"http://localhost:{port}/mcp"
+        elif transport in {"sse", "streamable_http", "streamable-http", "http"}:
             url = raw_cfg.get("url")
             if not url:
-                logger.warning("[MCP] %s: SSE transport에는 url이 필요합니다.", name)
+                logger.warning("[MCP] %s: HTTP/SSE transport에는 url이 필요합니다.", name)
                 continue
             normalized["url"] = url
             if raw_cfg.get("headers"):
