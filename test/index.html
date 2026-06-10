@@ -277,6 +277,7 @@
             opacity: 0.9;
         }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 
 <body>
@@ -616,7 +617,7 @@
                             const nodeName = data.node;
                             if (!currentMessageDiv) {
                                 currentMessageDiv = appendMessage("", "agent");
-                                currentMessageDiv.innerText = "";
+                                currentMessageDiv.innerHTML = "";
                                 thoughtLogDiv = document.createElement("div");
                                 thoughtLogDiv.className = "thought-log";
                                 currentMessageDiv.appendChild(thoughtLogDiv);
@@ -652,7 +653,7 @@
                         } else if (status === "tool_start") {
                             if (!currentMessageDiv) {
                                 currentMessageDiv = appendMessage("", "agent");
-                                currentMessageDiv.innerText = "";
+                                currentMessageDiv.innerHTML = "";
                                 thoughtLogDiv = document.createElement("div");
                                 thoughtLogDiv.className = "thought-log";
                                 currentMessageDiv.appendChild(thoughtLogDiv);
@@ -669,14 +670,19 @@
                     else if (type === "token") {
                         if (!currentMessageDiv) {
                             currentMessageDiv = appendMessage("", "agent");
-                            currentMessageDiv.innerText = "";
+                            currentMessageDiv.innerHTML = "";
                             thoughtLogDiv = document.createElement("div");
                             thoughtLogDiv.className = "thought-log";
                             currentMessageDiv.appendChild(thoughtLogDiv);
                         }
 
                         if (finalResponseDiv) {
-                            finalResponseDiv.innerText += data.chunk;
+                            finalResponseDiv.rawText = (finalResponseDiv.rawText || "") + data.chunk;
+                            if (typeof marked !== 'undefined') {
+                                finalResponseDiv.innerHTML = marked.parse(finalResponseDiv.rawText);
+                            } else {
+                                finalResponseDiv.innerText = finalResponseDiv.rawText;
+                            }
                         } else if (thoughtLogDiv) {
                             thoughtLogDiv.innerText += data.chunk;
                             thoughtLogDiv.scrollTop = thoughtLogDiv.scrollHeight;
@@ -858,7 +864,12 @@
         function appendMessage(text, role, images = []) {
             const msgDiv = document.createElement('div');
             msgDiv.className = `message ${role}`;
-            msgDiv.innerText = text;
+            
+            if (role === 'agent' && typeof marked !== 'undefined') {
+                msgDiv.innerHTML = marked.parse(text);
+            } else {
+                msgDiv.innerText = text;
+            }
 
             images.forEach(imgBase64 => {
                 const img = document.createElement('img');
