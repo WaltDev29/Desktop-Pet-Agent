@@ -15,6 +15,17 @@ from langgraph.types import Command
 from pydantic import BaseModel
 import socket
 import httpx
+import subprocess
+
+def get_hardware_uuid() -> str:
+    try:
+        hw_uuid = subprocess.check_output('wmic csproduct get uuid').decode().split('\n')[1].strip()
+        if hw_uuid:
+            return hw_uuid
+    except Exception as e:
+        logger.error(f"Failed to get hardware UUID: {e}")
+    # Fallback to random UUID if wmic fails
+    return str(uuid.uuid4())
 
 import os
 import sys
@@ -82,7 +93,7 @@ async def signup_to_gateway(req: SignupRequest):
     if gateway_client.device_id:
         device_id = gateway_client.device_id
     else:
-        device_id = str(uuid.uuid4())
+        device_id = get_hardware_uuid()
         
     device_name = socket.gethostname()
     
@@ -127,6 +138,15 @@ async def check_status():
         "is_local_mode": gateway_client.is_local_mode
     }
 
+@router.post("/api/reconnect")
+async def reconnect_to_gateway():
+    if not gateway_client.access_token:
+        return {"status": "error", "message": "No login info."}
+    
+    await gateway_client.disconnect()
+    asyncio.create_task(gateway_client.connect())
+    return {"status": "success", "message": "Reconnecting"}
+
 @router.post("/api/logout")
 async def logout_from_gateway():
     gateway_client.clear_auth()
@@ -148,7 +168,7 @@ async def login_to_gateway(req: LoginRequest):
     if gateway_client.device_id:
         device_id = gateway_client.device_id
     else:
-        device_id = str(uuid.uuid4())
+        device_id = get_hardware_uuid()
         
     device_name = socket.gethostname()
     

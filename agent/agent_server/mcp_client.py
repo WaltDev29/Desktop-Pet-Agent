@@ -6,8 +6,10 @@ config.json의 mcpServers 설정을 읽어 MultiServerMCPClient를 구성합니�
 worker에서 통합 관리합니다.
 """
 
+import asyncio
 import json
 import logging
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -203,8 +205,30 @@ async def _normalize_mcp_config(mcp_config: dict) -> dict:
             if not command:
                 logger.warning("[MCP] %s: stdio transport에는 command가 필요합니다.", name)
                 continue
+            
+            args = raw_cfg.get("args", [])
+            
+            if command == "uvx" and args:
+                package_ref = args[0]
+                executable_name = package_ref.split('@')[0]
+                if not shutil.which(executable_name):
+                    logger.info("[MCP] %s: '%s' 실행 파일을 찾을 수 없어 자동 설치를 시도합니다...", name, executable_name)
+                    try:
+                        process = await asyncio.create_subprocess_exec(
+                            "uv", "tool", "install", package_ref,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE
+                        )
+                        stdout, stderr = await process.communicate()
+                        if process.returncode == 0:
+                            logger.info("[MCP] %s: '%s' 자동 설치 완료", name, package_ref)
+                        else:
+                            logger.warning("[MCP] %s: '%s' 자동 설치 실패 (코드 %s): %s", name, package_ref, process.returncode, stderr.decode('utf-8', errors='replace').strip())
+                    except Exception as e:
+                        logger.error("[MCP] %s: '%s' 자동 설치 중 에러 발생: %s", name, package_ref, e)
+
             normalized["command"] = sys.executable if command == "python" else command
-            normalized["args"] = raw_cfg.get("args", [])
+            normalized["args"] = args
             normalized["env"] = raw_cfg.get("env", {})
 
         final_config[name] = normalized
