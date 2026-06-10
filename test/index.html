@@ -306,6 +306,10 @@
             <button onclick="deleteCurrentSession()" style="background-color: #dc3545; width: 100%;">현재 세션 삭제
                 🗑️</button>
             <button onclick="logout()" style="background-color: #666; width: 100%;">로그아웃 🚪</button>
+            <div id="gateway-status" style="display: flex; align-items: center; justify-content: center; gap: 8px; padding: 10px; background-color: #333; border-radius: 8px; font-size: 0.9em; font-weight: bold; color: #ff4d4d; cursor: pointer; transition: background 0.2s;" onclick="retryConnection()" onmouseover="this.style.backgroundColor='#444'" onmouseout="this.style.backgroundColor='#333'" title="클릭하여 재연결 시도">
+                <span id="gateway-icon">🔴</span>
+                <span id="gateway-text">오프라인</span>
+            </div>
             <hr style="border-color: #444; width: 100%;">
             <div id="session-list"
                 style="display: flex; flex-direction: column; gap: 8px; overflow-y: auto; flex-grow: 1;">
@@ -356,11 +360,27 @@
                 if (data.is_logged_in) {
                     document.getElementById('login-overlay').style.display = 'none';
                 }
+                
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    if (data.is_local_mode) {
+                        document.getElementById('gateway-icon').innerText = "🔴";
+                        document.getElementById('gateway-text').innerText = "Gateway 오프라인";
+                        document.getElementById('gateway-status').style.color = "#ff4d4d";
+                    } else {
+                        document.getElementById('gateway-icon').innerText = "🟢";
+                        document.getElementById('gateway-text').innerText = "Gateway 온라인";
+                        document.getElementById('gateway-status').style.color = "#4CAF50";
+                    }
+                }
             } catch (err) {
                 console.warn("에이전트 상태 확인 실패", err);
+                document.getElementById('gateway-icon').innerText = "🔴";
+                document.getElementById('gateway-text').innerText = "Agent 오프라인";
+                document.getElementById('gateway-status').style.color = "#ff4d4d";
             }
         }
         checkStatus();
+        setInterval(checkStatus, 5000); // 5초마다 상태 갱신
 
         let isSignupMode = false;
 
@@ -539,13 +559,14 @@
             ws = new WebSocket(API_URL);
 
             ws.onopen = () => {
-                appendMessage("서버와 연결되었습니다. 🟢", "agent");
+                appendMessage("로컬 에이전트 서버와 연결되었습니다. 🟢", "agent");
                 ws.send(JSON.stringify({
                     type: "register",
                     payload: {
                         role: "desktop"
                     }
                 }));
+                checkStatus();
             };
 
             ws.onmessage = (event) => {
@@ -745,6 +766,9 @@
             };
 
             ws.onclose = () => {
+                document.getElementById('gateway-icon').innerText = "🔴";
+                document.getElementById('gateway-text').innerText = "Agent 오프라인";
+                document.getElementById('gateway-status').style.color = "#ff4d4d";
                 currentMessageDiv = null;
                 thoughtLogDiv = null;
                 finalResponseDiv = null;
@@ -759,6 +783,30 @@
 
         // 초기 웹소켓 연결
         connectWebSocket();
+
+        async function retryConnection() {
+            if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+                document.getElementById('gateway-icon').innerText = "🟡";
+                document.getElementById('gateway-text').innerText = "Agent 재연결 중...";
+                document.getElementById('gateway-status').style.color = "#ffc107";
+                connectWebSocket();
+                checkStatus(); 
+            } else if (ws.readyState === WebSocket.OPEN) {
+                document.getElementById('gateway-icon').innerText = "🟡";
+                document.getElementById('gateway-text').innerText = "Gateway 재연결 중...";
+                document.getElementById('gateway-status').style.color = "#ffc107";
+                try {
+                    const res = await fetch('http://localhost:8001/api/reconnect', { method: 'POST' });
+                    const data = await res.json();
+                    if(data.status === 'error') {
+                        alert(data.message);
+                    }
+                } catch(e) {
+                    alert("재연결 요청 실패: " + e);
+                }
+                setTimeout(checkStatus, 2000);
+            }
+        }
 
         function resetSendButton() {
             setAgentBusy(false);

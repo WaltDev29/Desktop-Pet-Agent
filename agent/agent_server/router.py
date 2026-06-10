@@ -138,6 +138,15 @@ async def check_status():
         "is_local_mode": gateway_client.is_local_mode
     }
 
+@router.post("/api/reconnect")
+async def reconnect_to_gateway():
+    if not gateway_client.access_token:
+        return {"status": "error", "message": "No login info."}
+    
+    await gateway_client.disconnect()
+    asyncio.create_task(gateway_client.connect())
+    return {"status": "success", "message": "Reconnecting"}
+
 @router.post("/api/logout")
 async def logout_from_gateway():
     gateway_client.clear_auth()
