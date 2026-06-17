@@ -47,7 +47,12 @@ class ExecutionPlan(BaseModel):
     plan: list[str]
 
 # 실행 전 사용자 승인이 필요한 위험 도구 목록
-DANGEROUS_TOOLS = ["write_file_tool", "delete_file_tool"]
+DANGEROUS_TOOLS = [
+    # 이메일 관련 (발송, 삭제, 계정 추가 등 상태 변경)
+    "send_email", "delete_emails", "add_email_account",
+    # OS/시스템 제어 (스크립트 실행, 파일 시스템, 레지스트리, 프로세스 등)
+    "PowerShell", "FileSystem"
+]
 
 # Worker 1회 태스크당 최대 도구 호출 횟수 (무한 루프 방지)
 MAX_TOOL_CALLS = 15

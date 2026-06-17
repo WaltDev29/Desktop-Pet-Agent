@@ -60,7 +60,7 @@ class LogPayload(SessionPayload):
 
 class ApprovalRequestPayload(SessionPayload):
     tool_name: str
-    tool_args: Dict[str, Any] = Field(..., description="도구 실행에 필요한 파라미터")
+    tool_args: Any = Field(..., description="도구 실행에 필요한 파라미터 (Dict 또는 List)")
     tool_call_id: str = Field(..., description="현재 에이전트의 tool_call_id (인터럽트 식별용)")
     message: str = Field(..., description="사용자에게 보여질 승인 요청 메시지")
 
