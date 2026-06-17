@@ -666,16 +666,15 @@ async def websocket_endpoint(websocket: WebSocket):
                     session_id = app_payload.session_id
                     
                     if not gateway_client.is_local_mode:
-                        # [온라인 모드] 게이트웨이로 전달
+                        # [온라인 모드] 게이트웨이로 전달 (앱 UI 동기화용)
                         await gateway_client.send_message(msg)
-                    else:
-                        # [로컬 모드] 직접 처리
-                        agent_task = asyncio.create_task(execute_agent(session_id, command=Command(resume=app_payload.approve)))
-                        active_agent_tasks[session_id] = agent_task
-                        try:
-                            await agent_task
-                        finally:
-                            active_agent_tasks.pop(session_id, None)
+                    
+                    agent_task = asyncio.create_task(execute_agent(session_id, command=Command(resume=app_payload.approve)))
+                    active_agent_tasks[session_id] = agent_task
+                    try:
+                        await agent_task
+                    finally:
+                        active_agent_tasks.pop(session_id, None)
                 
                 elif msg.type == "stop":
                     raw_data = json.loads(raw_msg)
