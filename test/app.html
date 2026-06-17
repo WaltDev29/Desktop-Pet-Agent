@@ -425,6 +425,15 @@
                 const res = await fetch(`${REST_URL}/api/devices`, {
                     headers: { 'Authorization': `Bearer ${appAccessToken}` }
                 });
+                
+                if (res.status === 401 || res.status === 403) {
+                    alert("인증 토큰이 만료되었습니다. 다시 로그인해주세요.");
+                    localStorage.removeItem("app_access_token");
+                    appAccessToken = null;
+                    location.reload();
+                    return [];
+                }
+                
                 const devices = await res.json();
                 pcList = devices.filter(d => d.device_type === 'pc');
                 renderPcList();
