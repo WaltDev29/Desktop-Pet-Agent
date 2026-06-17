@@ -138,6 +138,17 @@ async def check_status():
         "is_local_mode": gateway_client.is_local_mode
     }
 
+@router.get("/api/auth_info")
+async def get_auth_info():
+    if not gateway_client.access_token:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=401, detail="Not logged in")
+    return {
+        "access_token": gateway_client.access_token,
+        "device_id": gateway_client.device_id,
+        "api_server": gateway_client.api_server
+    }
+
 @router.post("/api/reconnect")
 async def reconnect_to_gateway():
     if not gateway_client.access_token:
