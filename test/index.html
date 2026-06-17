@@ -307,9 +307,21 @@
             <button onclick="deleteCurrentSession()" style="background-color: #dc3545; width: 100%;">현재 세션 삭제
                 🗑️</button>
             <button onclick="logout()" style="background-color: #666; width: 100%;">로그아웃 🚪</button>
-            <div id="gateway-status" style="display: flex; align-items: center; justify-content: center; gap: 8px; padding: 10px; background-color: #333; border-radius: 8px; font-size: 0.9em; font-weight: bold; color: #ff4d4d; cursor: pointer; transition: background 0.2s;" onclick="retryConnection()" onmouseover="this.style.backgroundColor='#444'" onmouseout="this.style.backgroundColor='#333'" title="클릭하여 재연결 시도">
+            <div id="gateway-status"
+                style="display: flex; align-items: center; justify-content: center; gap: 8px; padding: 10px; background-color: #333; border-radius: 8px; font-size: 0.9em; font-weight: bold; color: #ff4d4d; cursor: pointer; transition: background 0.2s;"
+                onclick="retryConnection()" onmouseover="this.style.backgroundColor='#444'"
+                onmouseout="this.style.backgroundColor='#333'" title="클릭하여 재연결 시도">
                 <span id="gateway-icon">🔴</span>
                 <span id="gateway-text">오프라인</span>
+            </div>
+            <hr style="border-color: #444; width: 100%;">
+            <!-- 기기 목록 추가 -->
+            <div>
+                <h3 style="margin-top: 0; font-size: 1.1em; text-align: center;">기기 목록</h3>
+                <div id="pc-list"
+                    style="display: flex; flex-direction: column; gap: 8px; max-height: 200px; overflow-y: auto;">
+                    <!-- 기기 버튼들이 여기에 추가됩니다 -->
+                </div>
             </div>
             <hr style="border-color: #444; width: 100%;">
             <div id="session-list"
@@ -353,6 +365,12 @@
         let finalResponseDiv = null;
         let isAgentBusy = false;
 
+        let gatewayToken = null;
+        let gatewayUrl = null;
+        let localDeviceId = null;
+        let targetAgentId = null;
+        let pcList = [];
+
         // 에이전트 로그인 상태 확인
         async function checkStatus() {
             try {
@@ -360,16 +378,34 @@
                 const data = await res.json();
                 if (data.is_logged_in) {
                     document.getElementById('login-overlay').style.display = 'none';
+
+                    try {
+                        const authRes = await fetch('http://localhost:8001/api/auth_info');
+                        if (authRes.ok) {
+                            const authData = await authRes.json();
+                            gatewayToken = authData.access_token;
+                            localDeviceId = authData.device_id;
+                            let serverUrl = authData.api_server;
+                            if (serverUrl.startsWith('http://') && serverUrl.includes('petagent.aikopo.net')) {
+                                serverUrl = serverUrl.replace('http://', 'https://');
+                            }
+                            gatewayUrl = serverUrl;
+                            if (!targetAgentId) {
+                                targetAgentId = localDeviceId;
+                            }
+                            fetchPcList();
+                        }
+                    } catch (e) { }
                 }
-                
+
                 if (ws && ws.readyState === WebSocket.OPEN) {
-                    if (data.is_local_mode) {
+                    if (data.is_local_mode && targetAgentId === localDeviceId) {
                         document.getElementById('gateway-icon').innerText = "🔴";
                         document.getElementById('gateway-text').innerText = "Gateway 오프라인";
                         document.getElementById('gateway-status').style.color = "#ff4d4d";
                     } else {
                         document.getElementById('gateway-icon').innerText = "🟢";
-                        document.getElementById('gateway-text').innerText = "Gateway 온라인";
+                        document.getElementById('gateway-text').innerText = "온라인";
                         document.getElementById('gateway-status').style.color = "#4CAF50";
                     }
                 }
@@ -382,6 +418,63 @@
         }
         checkStatus();
         setInterval(checkStatus, 5000); // 5초마다 상태 갱신
+
+        async function fetchPcList() {
+            if (!gatewayToken || !gatewayUrl) return [];
+            try {
+                let hostUrl = gatewayUrl;
+                if (hostUrl.startsWith('ws')) hostUrl = hostUrl.replace('ws', 'http');
+                if (hostUrl.startsWith('http://') && hostUrl.includes('petagent.aikopo.net')) {
+                    hostUrl = hostUrl.replace('http://', 'https://');
+                }
+                const res = await fetch(`${hostUrl}/api/devices`, {
+                    headers: { 'Authorization': `Bearer ${gatewayToken}` }
+                });
+                if (res.status === 401 || res.status === 403) {
+                    console.warn("인증 토큰이 만료되었습니다.");
+                    return [];
+                }
+                const devices = await res.json();
+                pcList = devices.filter(d => d.device_type === 'pc');
+                renderPcList();
+                return pcList;
+            } catch (err) {
+                console.error(err);
+                return [];
+            }
+        }
+
+        function renderPcList() {
+            const listDiv = document.getElementById('pc-list');
+            listDiv.innerHTML = '';
+            pcList.forEach(pc => {
+                const btn = document.createElement('button');
+                const statusIcon = pc.is_online ? '🟢' : '⚪';
+                btn.innerText = `${statusIcon} ${pc.device_name} ${pc.device_id === localDeviceId ? '(로컬)' : ''}`;
+                btn.style.width = "100%";
+                btn.style.textAlign = "left";
+                btn.style.padding = "8px 12px";
+                btn.style.border = "none";
+                btn.style.borderRadius = "8px";
+                btn.style.cursor = "pointer";
+                btn.style.color = "white";
+                btn.style.marginBottom = "5px";
+                btn.style.backgroundColor = (pc.device_id === targetAgentId) ? "#4a90e2" : "#444";
+
+                btn.onclick = () => {
+                    if (targetAgentId === pc.device_id) return;
+                    targetAgentId = pc.device_id;
+
+                    // 세션 리스트 초기화
+                    sessionList = [];
+                    currentSessionId = null;
+                    renderSessionList();
+                    chatBox.innerHTML = '<div class="message agent">PC가 변경되었습니다. 대화를 불러오는 중...</div>';
+                    connectWebSocket();
+                };
+                listDiv.appendChild(btn);
+            });
+        }
 
         let isSignupMode = false;
 
@@ -508,7 +601,22 @@
             });
         }
 
+        function isTargetAgentOnline() {
+            if (!targetAgentId) return false;
+            // 로컬 에이전트인 경우 (자신)
+            if (targetAgentId === localDeviceId) {
+                return ws && ws.readyState === WebSocket.OPEN;
+            }
+            // 원격 에이전트인 경우 pcList에서 확인
+            const target = pcList.find(pc => pc.device_id === targetAgentId);
+            return target ? target.is_online : false;
+        }
+
         function createNewSession() {
+            if (!isTargetAgentOnline()) {
+                alert("선택한 기기가 오프라인 상태입니다.");
+                return;
+            }
             const newSid = crypto.randomUUID();
             currentSessionId = newSid;
 
@@ -530,6 +638,10 @@
         }
 
         function deleteCurrentSession() {
+            if (!isTargetAgentOnline()) {
+                alert("선택한 기기가 오프라인 상태입니다.");
+                return;
+            }
             if (!currentSessionId) return;
             if (!confirm('현재 세션을 삭제하시겠습니까?')) return;
 
@@ -557,18 +669,46 @@
         renderSessionList();
 
         function connectWebSocket() {
-            ws = new WebSocket(API_URL);
+            if (ws) {
+                ws.close();
+            }
 
-            ws.onopen = () => {
-                appendMessage("로컬 에이전트 서버와 연결되었습니다. 🟢", "agent");
-                ws.send(JSON.stringify({
-                    type: "register",
-                    payload: {
-                        role: "desktop"
-                    }
-                }));
-                checkStatus();
-            };
+            if (targetAgentId === localDeviceId || !targetAgentId) {
+                // 내 로컬 PC (기존 로컬 에이전트 연결)
+                ws = new WebSocket(API_URL);
+
+                ws.onopen = () => {
+                    appendMessage("로컬 에이전트 서버와 연결되었습니다. 🟢", "agent");
+                    ws.send(JSON.stringify({
+                        type: "register",
+                        payload: {
+                            role: "desktop"
+                        }
+                    }));
+                    checkStatus();
+                };
+            } else {
+                // 다른 원격 PC 제어 ('app' 권한으로 게이트웨이 접속)
+                let wsHost = gatewayUrl;
+                if (wsHost.startsWith('http')) wsHost = wsHost.replace('http', 'ws');
+                const dynamicApiUrl = `${wsHost}/ws?token=${gatewayToken}`;
+                ws = new WebSocket(dynamicApiUrl);
+
+                ws.onopen = () => {
+                    document.getElementById('gateway-icon').innerText = "🟢";
+                    document.getElementById('gateway-text').innerText = "온라인";
+                    document.getElementById('gateway-status').style.color = "#4CAF50";
+                    appendMessage("원격 에이전트와 연결되었습니다. 🟢", "agent");
+                    ws.send(JSON.stringify({
+                        type: "register",
+                        payload: {
+                            role: "app",
+                            client_id: crypto.randomUUID(),
+                            target_agent_id: targetAgentId
+                        }
+                    }));
+                };
+            }
 
             ws.onmessage = (event) => {
                 try {
@@ -796,7 +936,7 @@
                 document.getElementById('gateway-text').innerText = "Agent 재연결 중...";
                 document.getElementById('gateway-status').style.color = "#ffc107";
                 connectWebSocket();
-                checkStatus(); 
+                checkStatus();
             } else if (ws.readyState === WebSocket.OPEN) {
                 document.getElementById('gateway-icon').innerText = "🟡";
                 document.getElementById('gateway-text').innerText = "Gateway 재연결 중...";
@@ -804,10 +944,10 @@
                 try {
                     const res = await fetch('http://localhost:8001/api/reconnect', { method: 'POST' });
                     const data = await res.json();
-                    if(data.status === 'error') {
+                    if (data.status === 'error') {
                         alert(data.message);
                     }
-                } catch(e) {
+                } catch (e) {
                     alert("재연결 요청 실패: " + e);
                 }
                 setTimeout(checkStatus, 2000);
@@ -864,7 +1004,7 @@
         function appendMessage(text, role, images = []) {
             const msgDiv = document.createElement('div');
             msgDiv.className = `message ${role}`;
-            
+
             if (role === 'agent' && typeof marked !== 'undefined') {
                 msgDiv.innerHTML = marked.parse(text);
             } else {
@@ -947,6 +1087,11 @@
         }
 
         function sendMessage() {
+            if (!isTargetAgentOnline()) {
+                alert("선택한 기기가 오프라인 상태입니다.");
+                return;
+            }
+
             if (isAgentBusy) {
                 if (!ws || ws.readyState !== WebSocket.OPEN) return;
                 if (currentSessionId) {
