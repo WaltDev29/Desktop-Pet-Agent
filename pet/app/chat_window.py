@@ -112,6 +112,13 @@ class ChatWindow(QWidget):
 
         self.is_shutting_down = False
 
+        self._auth_token: str | None = None
+        self._api_server: str | None = None
+        self._local_device_id: str | None = None
+        self._is_remote: bool = False
+        self._remote_device_id: str | None = None
+        self._pc_item_btns: list[tuple] = []
+
         self.message_history = []
         
         # ── 로컬 세션 상태 로드 (낙관적 UI) ────────────────────────
@@ -190,7 +197,7 @@ class ChatWindow(QWidget):
         self.new_chat_btn.setStyleSheet(NEW_CHAT_BTN_STYLE)
         self.new_chat_btn.clicked.connect(self.prepare_new_chat)
         
-        self.settings_btn = QPushButton("⚙️ 설정")
+        self.settings_btn = QPushButton("설정")
         self.settings_btn.setStyleSheet(get_settings_btn_style(self._current_theme))
         self.settings_btn.clicked.connect(self.open_settings)
         
@@ -225,8 +232,24 @@ class ChatWindow(QWidget):
         self.attach_btn.setToolTip("이미지 첨부 (최대 3개)")
         self.attach_btn.clicked.connect(self.attach_image)
 
+        self.send_btn = QPushButton("전송")
+        self.send_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2979B0;
+                color: white;
+                border-radius: 8px;
+                font-weight: bold;
+                font-size: 13px;
+                padding: 6px 14px;
+                min-width: 52px;
+            }
+            QPushButton:hover { background-color: #1A5F8F; }
+        """)
+        self.send_btn.clicked.connect(self._on_send_btn_clicked)
+
         input_layout.addWidget(self.attach_btn)
         input_layout.addWidget(self.input_field)
+        input_layout.addWidget(self.send_btn)
 
         # ── 하단 버튼 행 (종료 버튼) ──────────────────────────────────
         self.close_btn = QPushButton("종료")
@@ -272,6 +295,8 @@ class ChatWindow(QWidget):
         self.chat_client.signaler.response_received.connect(self.on_response_received)
         self.chat_client.signaler.error_occurred.connect(self.on_error_occurred)
         self.chat_client.signaler.connected.connect(self._on_ws_connected)
+        self.chat_client.signaler.remote_connected.connect(self._on_remote_ws_connected)
+        self.chat_client.signaler.pc_list_received.connect(self._render_pc_list)
 
         # Race condition 방지: 이미 연결된 상태라면 수동으로 트리거
         with self.chat_client._ws_lock:
@@ -434,15 +459,69 @@ class ChatWindow(QWidget):
         panel_layout.setContentsMargins(8, 12, 8, 12)
         panel_layout.setSpacing(8)
 
-        # 상단 신규 채팅 버튼
         panel_layout.addWidget(self.new_chat_btn)
 
-        # 헤더
-        header = QLabel("채팅 목록")
-        header.setObjectName("sidebar_header")
-        panel_layout.addWidget(header)
+        # ── WS 연결 상태 인디케이터 ──
+        self.ws_status_btn = QPushButton("오프라인")
+        self.ws_status_btn.setToolTip("클릭하여 재연결 시도")
+        self.ws_status_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2A2A2A;
+                color: #ff4d4d;
+                border: 1px solid #444;
+                border-radius: 8px;
+                font-size: 11px;
+                font-weight: bold;
+                padding: 5px 8px;
+            }
+            QPushButton:hover { background-color: #3A3A3A; }
+        """)
+        self.ws_status_btn.clicked.connect(self._retry_connection)
+        panel_layout.addWidget(self.ws_status_btn)
 
-        # 세션 목록 스크롤 영역
+        # ── PC 목록 섹션 ──────────────────────────────────────
+        pc_header_row = QWidget()
+        pc_header_row.setStyleSheet("background: transparent;")
+        pc_header_layout = QHBoxLayout(pc_header_row)
+        pc_header_layout.setContentsMargins(4, 0, 0, 0)
+        pc_header_layout.setSpacing(4)
+
+        pc_header_label = QLabel("🖥 PC 목록")
+        pc_header_label.setObjectName("sidebar_header")
+
+        self.pc_refresh_btn = QPushButton("새로고침")
+        self.pc_refresh_btn.setFixedSize(22, 22)
+        self.pc_refresh_btn.setToolTip("PC 목록 새로고침")
+        self.pc_refresh_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent; border: none;
+                font-size: 12px; border-radius: 4px;
+            }
+            QPushButton:hover { background: rgba(255,255,255,20); }
+        """)
+        self.pc_refresh_btn.clicked.connect(self._fetch_pc_list)
+
+        pc_header_layout.addWidget(pc_header_label, 1)
+        pc_header_layout.addWidget(self.pc_refresh_btn)
+        panel_layout.addWidget(pc_header_row)
+
+        self.pc_list_content = QWidget()
+        self.pc_list_content.setStyleSheet("background: transparent;")
+        self.pc_list_layout = QVBoxLayout(self.pc_list_content)
+        self.pc_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.pc_list_layout.setSpacing(2)
+
+        self.local_pc_btn = QPushButton("내 PC (로컬)")
+        self.local_pc_btn.setStyleSheet(self._get_pc_btn_style(online=True, active=True))
+        self.local_pc_btn.clicked.connect(self._connect_to_local)
+        self.pc_list_layout.addWidget(self.local_pc_btn)
+
+        panel_layout.addWidget(self.pc_list_content)
+        # ── 채팅 목록 섹션 ──────────────────────────────────────
+        chat_header = QLabel("채팅 목록")
+        chat_header.setObjectName("sidebar_header")
+        panel_layout.addWidget(chat_header)
+
         self.session_list_scroll = QScrollArea()
         self.session_list_scroll.setWidgetResizable(True)
         self.session_list_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -459,17 +538,15 @@ class ChatWindow(QWidget):
         self.session_list_scroll.setWidget(self.session_list_content)
         panel_layout.addWidget(self.session_list_scroll, 1)
 
-        # 초기 세션 목록 렌더링
         for s in self.sessions:
             self._add_session_item(s)
         self._update_session_highlight()
-        
-        # 하단 설정 / 종료 버튼 영역
+
         panel_bottom_layout = QVBoxLayout()
         panel_bottom_layout.setSpacing(6)
         panel_bottom_layout.addWidget(self.settings_btn)
         panel_bottom_layout.addWidget(self.close_btn)
-        
+
         panel_layout.addLayout(panel_bottom_layout)
 
         return panel
@@ -504,9 +581,46 @@ class ChatWindow(QWidget):
             self.settings.remove("agent_session_id")
 
     def _on_ws_connected(self):
-        # 웹소켓 연결 성공 시, 로컬에 저장된 세션이 있다면 즉시 히스토리 로드
         if self.current_session.session_id:
             self._load_session(self.current_session)
+        self._fetch_auth_info()
+        self._update_ws_status(online=True, remote=False)
+
+    def _on_remote_ws_connected(self):
+        self._is_remote = True
+        self._clear_bubble_widgets()
+        self._reset_stream_state()
+        self._update_pc_highlight()
+        self._update_ws_status(online=True, remote=True)
+
+    def _update_ws_status(self, online: bool, remote: bool = False):
+        if not hasattr(self, "ws_status_btn"):
+            return
+        if online:
+            label = "원격 연결" if remote else "온라인"
+            color = "#4CAF50"
+        else:
+            label = "오프라인"
+            color = "#ff4d4d"
+        self.ws_status_btn.setText(label)
+        self.ws_status_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #2A2A2A;
+                color: {color};
+                border: 1px solid #444;
+                border-radius: 8px;
+                font-size: 11px;
+                font-weight: bold;
+                padding: 5px 8px;
+            }}
+            QPushButton:hover {{ background-color: #3A3A3A; }}
+        """)
+
+    def _retry_connection(self):
+        if self._is_remote:
+            return
+        self.chat_client.reconnect_local("ws://localhost:8000/ws")
+        self._update_ws_status(online=False)
 
     def _load_session(self, session: ChatSession):
         self._clear_bubble_widgets()
@@ -541,19 +655,19 @@ class ChatWindow(QWidget):
     # ── 사이드바 항목 관리 ─────────────────────────────────────────
 
     def _add_session_item(self, session: ChatSession, index: int = -1):
-        """사이드바 목록에 세션 항목 버튼(+삭제 버튼)을 행 위젯으로 추가합니다."""
         row = QWidget()
         row.setStyleSheet("background: transparent;")
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(2)
 
-        btn = QPushButton(f"💬 {session.title}")
+        btn = QPushButton(f"{session.title}")
         btn.setStyleSheet(get_session_item_style(self._current_theme))
         btn.setToolTip(session.title)
         btn.clicked.connect(lambda checked=False, s=session: self._on_session_clicked(s))
+        btn.mouseDoubleClickEvent = lambda e, s=session: self._rename_session(s)
 
-        del_btn = QPushButton("🗑")
+        del_btn = QPushButton("삭제")
         del_btn.setFixedSize(28, 28)
         del_btn.setToolTip("이 세션 삭제")
         del_btn.setStyleSheet("""
@@ -588,7 +702,7 @@ class ChatWindow(QWidget):
         for item in self._session_item_btns:
             s, btn = item[0], item[1]
             if s is session:
-                btn.setText(f"💬 {session.title}")
+                btn.setText(f"{session.title}")
                 btn.setToolTip(session.title)
                 self._save_local_sessions()
                 break
@@ -682,6 +796,163 @@ class ChatWindow(QWidget):
             else:
                 self._add_bubble(PET_MSG_FORMAT.format(text="모든 세션이 삭제되었습니다. 새 대화를 시작해주세요."), "pet")
 
+    # ── 원격 PC 제어 ─────────────────────────────────────────────
+
+    def _get_pc_btn_style(self, online: bool, active: bool = False) -> str:
+        if active:
+            bg = "rgba(41,121,176,180)"
+            hover_bg = "rgba(41,121,176,220)"
+            color = "#FFFFFF"
+            weight = "bold"
+        elif online:
+            bg = "transparent"
+            hover_bg = "rgba(255,255,255,12)"
+            color = "#CCCCCC"
+            weight = "normal"
+        else:
+            bg = "transparent"
+            hover_bg = "transparent"
+            color = "#666666"
+            weight = "normal"
+        return f"""
+            QPushButton {{
+                background-color: {bg};
+                color: {color};
+                border: none;
+                border-radius: 8px;
+                font-size: 12px;
+                font-weight: {weight};
+                text-align: left;
+                padding: 6px 10px;
+                margin: 1px 4px;
+            }}
+            QPushButton:hover {{ background-color: {hover_bg}; }}
+        """
+
+    def _fetch_auth_info(self):
+        def _worker():
+            import requests
+            try:
+                resp = requests.get("http://localhost:8000/api/auth_info", timeout=5)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    self._auth_token = data.get("access_token")
+                    self._local_device_id = data.get("device_id")
+                    api_server = data.get("api_server", "")
+                    if api_server.startswith("http://"):
+                        api_server = "https://" + api_server[7:]
+                    self._api_server = api_server
+                    self._fetch_pc_list()
+            except Exception as e:
+                print(f"auth_info 조회 실패: {e}")
+        import threading
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _fetch_pc_list(self):
+        if not self._auth_token or not self._api_server:
+            return
+        def _worker():
+            import requests
+            try:
+                resp = requests.get(
+                    f"{self._api_server}/api/devices",
+                    headers={"Authorization": f"Bearer {self._auth_token}"},
+                    timeout=5
+                )
+                if resp.status_code in (401, 403):
+                    self._auth_token = None
+                    return
+                if resp.status_code == 200:
+                    devices = [d for d in resp.json() if d.get("device_type") == "pc"]
+                    self.chat_client.signaler.pc_list_received.emit(devices)
+            except Exception as e:
+                print(f"PC 목록 조회 실패: {e}")
+        import threading
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _render_pc_list_slot(self, devices: list):
+        self._render_pc_list(devices)
+
+    def _render_pc_list(self, devices: list):
+        for _, btn, _ in self._pc_item_btns:
+            self.pc_list_layout.removeWidget(btn)
+            btn.deleteLater()
+        self._pc_item_btns.clear()
+
+        for device in devices:
+            if device.get("device_id") == self._local_device_id:
+                continue
+            device_id = device.get("device_id", "")
+            name = device.get("device_name") or device.get("name") or device_id[:8]
+            is_online = device.get("is_online", False)
+            prefix = "[온라인]" if is_online else "[오프라인]"
+            btn = QPushButton(f"{prefix} {name}")
+            btn.setStyleSheet(self._get_pc_btn_style(online=is_online))
+            btn.setToolTip(name if is_online else f"{name} (오프라인)")
+            btn.setEnabled(is_online)
+            btn.clicked.connect(lambda checked=False, d=device: self._connect_to_remote_pc(d))
+            self.pc_list_layout.addWidget(btn)
+            self._pc_item_btns.append((device_id, btn, device))
+
+        self._update_pc_highlight()
+
+    def _update_pc_highlight(self):
+        is_local_active = not self._is_remote
+        self.local_pc_btn.setStyleSheet(self._get_pc_btn_style(online=True, active=is_local_active))
+        for device_id, btn, device in self._pc_item_btns:
+            is_active = self._is_remote and device_id == self._remote_device_id
+            is_online = device.get("is_online", False)
+            btn.setStyleSheet(self._get_pc_btn_style(online=is_online, active=is_active))
+
+    def _connect_to_remote_pc(self, device: dict):
+        if not device.get("is_online", False):
+            QMessageBox.warning(self, "연결 불가", "오프라인 상태의 기기입니다.")
+            return
+        device_id = device.get("device_id", "")
+        if self._is_remote and self._remote_device_id == device_id:
+            return
+        if not self._auth_token or not self._api_server:
+            QMessageBox.warning(self, "인증 오류", "인증 정보가 없습니다. 잠시 후 다시 시도해주세요.")
+            return
+
+        gateway_domain = self._api_server.replace("https://", "")
+        ws_url = f"wss://{gateway_domain}/ws"
+
+        self._remote_device_id = device_id
+        self.chat_client.session_id = None
+        self.chat_client.connect_to_remote(ws_url, self._auth_token, device_id)
+
+        self._clear_bubble_widgets()
+        self._reset_stream_state()
+        self.sessions.clear()
+        for item in self._session_item_btns:
+            row = item[2] if len(item) > 2 else item[1]
+            self.session_list_layout.removeWidget(row)
+            row.deleteLater()
+        self._session_item_btns.clear()
+
+        name = device.get("device_name") or device.get("name") or device_id[:8]
+        self._add_bubble(f"{name}에 연결 중...", "pet", add_to_session=False)
+
+    def _connect_to_local(self):
+        if not self._is_remote:
+            return
+        self._is_remote = False
+        self._remote_device_id = None
+        self.chat_client.reconnect_local("ws://localhost:8000/ws")
+
+        self._clear_bubble_widgets()
+        self._reset_stream_state()
+        self.sessions.clear()
+        for item in self._session_item_btns:
+            row = item[2] if len(item) > 2 else item[1]
+            self.session_list_layout.removeWidget(row)
+            row.deleteLater()
+        self._session_item_btns.clear()
+
+        self._update_pc_highlight()
+        self._add_bubble("로컬 PC로 연결되었습니다.", "pet", add_to_session=False)
+
     def _delete_session(self, session: ChatSession):
         """세션 삭제 확인 후 서버에 삭제 요청을 전송합니다."""
         sid = session.session_id
@@ -702,6 +973,20 @@ class ChatWindow(QWidget):
         self.remove_session_from_list(sid)
         payload = {"type": "session_deleted", "payload": {"session_id": sid}}
         self.chat_client.send_message(payload)
+
+    def _rename_session(self, session: ChatSession):
+        from PySide6.QtWidgets import QInputDialog
+        sid = session.session_id
+        if not sid:
+            return
+        new_title, ok = QInputDialog.getText(
+            self, "세션 제목 수정", "새 제목을 입력하세요:", text=session.title
+        )
+        if ok and new_title.strip():
+            session.title = new_title.strip()
+            self._refresh_sidebar_item(session)
+            payload = {"type": "session_update", "payload": {"session_id": sid, "title": new_title.strip()}}
+            self.chat_client.send_message(payload)
                 
     def render_history(self, history: list[dict]):
         local_bubbles = self.current_session.bubbles[:]
@@ -762,7 +1047,34 @@ class ChatWindow(QWidget):
     def set_agent_busy(self, is_busy: bool):
         self.input_field.setEnabled(not is_busy)
         self.attach_btn.setEnabled(not is_busy)
-        if not is_busy:
+        if is_busy:
+            self.send_btn.setText("중단")
+            self.send_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #dc3545;
+                    color: white;
+                    border-radius: 8px;
+                    font-weight: bold;
+                    font-size: 13px;
+                    padding: 6px 14px;
+                    min-width: 52px;
+                }
+                QPushButton:hover { background-color: #b02a37; }
+            """)
+        else:
+            self.send_btn.setText("전송")
+            self.send_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #2979B0;
+                    color: white;
+                    border-radius: 8px;
+                    font-weight: bold;
+                    font-size: 13px;
+                    padding: 6px 14px;
+                    min-width: 52px;
+                }
+                QPushButton:hover { background-color: #1A5F8F; }
+            """)
             self.input_field.setFocus()
 
     # ── 내부 헬퍼 ─────────────────────────────────────────────────
@@ -789,6 +1101,16 @@ class ChatWindow(QWidget):
         self._thinking_stream_buffer = ""
 
 
+
+    def _on_send_btn_clicked(self):
+        if self._streaming:
+            sid = self.current_session.session_id if self.current_session else None
+            if sid:
+                payload = {"type": "stop", "payload": {"session_id": sid}}
+                self.chat_client.send_message(payload)
+            self.set_agent_busy(False)
+            return
+        self.send_message()
 
     def send_message(self):
         text = self.input_field.toPlainText().strip()
@@ -998,7 +1320,7 @@ class ChatWindow(QWidget):
 
     def on_error_occurred(self, error: str):
         safe_error = html.escape(error)
-        self._add_bubble(f"⚠️ {safe_error}", "error")
+        self._add_bubble(f"{safe_error}", "error")
         self.scrollToBottom()
         self.input_field.setEnabled(True)
         self.attach_btn.setEnabled(True)
