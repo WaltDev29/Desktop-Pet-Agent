@@ -6,7 +6,7 @@ import uuid
 
 from PySide6.QtWidgets import (
     QWidget, QTextEdit, QTextBrowser, QVBoxLayout, QPushButton, QHBoxLayout,
-    QApplication, QGraphicsDropShadowEffect, QLabel,
+    QApplication, QGraphicsDropShadowEffect, QLabel, QFrame,
     QFileDialog, QScrollArea, QSlider, QMessageBox
 )
 from PySide6.QtCore import Qt, Signal, QPoint, QTimer, QEvent, QRect, QUrl, QSettings
@@ -41,8 +41,21 @@ from app.chat_style import (
     BUBBLE_MAX_HEIGHT,
     USER_BUBBLE_STYLE,
     PET_BUBBLE_STYLE,
+    PET_BUBBLE_STYLE_WITH_THINKING,
+    PET_BUBBLE_INNER_TEXT_STYLE,
     ERROR_BUBBLE_STYLE,
     CHAT_SCROLL_AREA_STYLE,
+    DARK_THEME,
+    LIGHT_THEME,
+    get_chat_scroll_area_style,
+    get_input_field_style,
+    get_sidebar_style,
+    get_session_item_style,
+    get_session_item_active_style,
+    get_sidebar_new_chat_btn_style,
+    get_settings_btn_style,
+    get_sidebar_toggle_btn_style,
+    get_sidebar_scroll_style,
 )
 
 from app.chat_network import ChatClient
@@ -51,7 +64,7 @@ from app.chat_session import ChatSession, BubbleSnapshot, StreamState
 from app.chat_gui import (
     BubbleFrame, ChatInputField, ImagePreviewItem,
     RESIZE_MARGIN, DIR_NONE, DIR_LEFT, DIR_RIGHT, DIR_TOP, DIR_BOTTOM, RESIZE_CURSOR_MAP,
-    fit_bubble_size, render_thinking_html, scroll_to_bottom,
+    fit_bubble_size, ThinkingWidget, apply_markdown_css, scroll_to_bottom,
     get_resize_dir, sync_pet_with_bubble
 )
 
@@ -103,6 +116,7 @@ class ChatWindow(QWidget):
         
         # ── 로컬 세션 상태 로드 (낙관적 UI) ────────────────────────
         self.settings = QSettings("PetAgent", "ChatApp")
+        self._current_theme = DARK_THEME
         saved_session_ids = self.settings.value("agent_sessions_list", [])
         saved_session_titles_json = self.settings.value("agent_session_titles", "{}")
         try:
@@ -134,7 +148,7 @@ class ChatWindow(QWidget):
         self.chat_scroll_area.setWidgetResizable(True)
         self.chat_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.chat_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.chat_scroll_area.setStyleSheet(CHAT_SCROLL_AREA_STYLE)
+        self.chat_scroll_area.setStyleSheet(get_chat_scroll_area_style(self._current_theme))
 
         self.chat_scroll_content = QWidget()
         self.chat_scroll_content.setObjectName("chat_scroll_content")
@@ -167,8 +181,8 @@ class ChatWindow(QWidget):
         top_btn_layout = QHBoxLayout()
         top_btn_layout.setContentsMargins(0, 0, 0, 5)
 
-        self.sidebar_toggle_btn = QPushButton("☰")
-        self.sidebar_toggle_btn.setStyleSheet(SIDEBAR_TOGGLE_BTN_STYLE)
+        self.sidebar_toggle_btn = QPushButton("▶")
+        self.sidebar_toggle_btn.setStyleSheet(get_sidebar_toggle_btn_style(self._current_theme))
         self.sidebar_toggle_btn.setToolTip("채팅 목록 열기/닫기")
         self.sidebar_toggle_btn.clicked.connect(self._toggle_sidebar)
         
@@ -176,16 +190,36 @@ class ChatWindow(QWidget):
         self.new_chat_btn.setStyleSheet(NEW_CHAT_BTN_STYLE)
         self.new_chat_btn.clicked.connect(self.prepare_new_chat)
         
-        self.settings_btn = QPushButton("⚙️ 설정")
-        self.settings_btn.setStyleSheet(SETTINGS_BTN_STYLE)
+        self.settings_btn = QPushButton("설정")
+        self.settings_btn.setStyleSheet(get_settings_btn_style(self._current_theme))
         self.settings_btn.clicked.connect(self.open_settings)
         
+        self.top_close_btn = QPushButton("X")
+        self.top_close_btn.setFixedSize(28, 28)
+        self.top_close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #AAAAAA;
+                border: none;
+                font-size: 14px;
+                font-weight: bold;
+                border-radius: 6px;
+            }
+            QPushButton:hover {
+                background-color: rgba(220, 50, 50, 180);
+                color: white;
+            }
+        """)
+        self.top_close_btn.clicked.connect(self.close_program)
+        self.top_close_btn.setToolTip("프로그램 종료")
+
         top_btn_layout.addWidget(self.sidebar_toggle_btn)
         top_btn_layout.addStretch()
+        top_btn_layout.addWidget(self.top_close_btn)
 
         self.input_field = ChatInputField()
         self.input_field.setPlaceholderText("무엇을 도와드릴까요?")
-        self.input_field.setStyleSheet(INPUT_FIELD_STYLE)
+        self.input_field.setStyleSheet(get_input_field_style(self._current_theme))
         self.input_field.returnPressed.connect(self.send_message)
 
         # ── 이미지 미리보기 영역 ──────────────────────────────
@@ -206,18 +240,52 @@ class ChatWindow(QWidget):
         input_layout = QHBoxLayout()
         input_layout.setContentsMargins(0, 0, 0, 0)
         
-        self.attach_btn = QPushButton("파일 업로드")
-        self.attach_btn.setStyleSheet(ATTACH_BTN_STYLE)
+        self.attach_btn = QPushButton("📎", self.input_field)
+        self.attach_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                border: none;
+                font-size: 20px;
+                padding: 0px;
+            }
+            QPushButton:hover { background-color: rgba(255,255,255,15); border-radius: 6px; }
+            QPushButton:disabled { opacity: 0.4; }
+        """)
         self.attach_btn.setToolTip("이미지 첨부 (최대 3개)")
+        self.attach_btn.setFixedSize(36, 36)
+        self.attach_btn.move(8, 7)
         self.attach_btn.clicked.connect(self.attach_image)
 
-        input_layout.addWidget(self.attach_btn)
-        input_layout.addWidget(self.input_field)
+        self._is_agent_busy = False
+        self.send_btn = QPushButton("전송")
+        self.send_btn.setFixedHeight(50)
+        self.send_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2979B0;
+                color: white;
+                border-radius: 12px;
+                font-weight: bold;
+                font-size: 13px;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background-color: #1A5F8F;
+            }
+            QPushButton:disabled {
+                background-color: #7AA9C8;
+                color: #DDDDDD;
+            }
+        """)
+        self.send_btn.setToolTip("메시지 전송")
+        self.send_btn.clicked.connect(self.send_message)
 
-        # ── 하단 버튼 행 (종료 버튼) ──────────────────────────────────
-        self.close_btn = QPushButton("종료")
-        self.close_btn.setStyleSheet(CLOSE_BTN_STYLE)
-        self.close_btn.clicked.connect(self.close_program)
+        input_layout.addWidget(self.input_field)
+        input_layout.addWidget(self.send_btn, 0, Qt.AlignBottom)
+
+        # ── 하단 버튼 행 (로그아웃 버튼) ──────────────────────────────────
+        self.logout_btn = QPushButton("로그아웃")
+        self.logout_btn.setStyleSheet("background-color: #D32F2F; color: white; border-radius: 8px; font-size: 13px; font-weight: bold; padding: 8px 16px;")
+        self.logout_btn.clicked.connect(self._handle_logout)
 
 
         # ── 채팅 영역 위젯 (우측) ────────────────────────────
@@ -234,7 +302,7 @@ class ChatWindow(QWidget):
         # ── 수평 분할: 사이드바(좌) + 채팅 영역(우) ──────────
         inner_h_layout = QHBoxLayout()
         inner_h_layout.setContentsMargins(0, 0, 0, 0)
-        inner_h_layout.setSpacing(0)
+        inner_h_layout.setSpacing(12)
 
         self.sidebar_panel = self._build_sidebar()
         self.sidebar_panel.hide()  # 기본: 접혀 있음
@@ -281,6 +349,7 @@ class ChatWindow(QWidget):
         
 
         self.handler = ChatResponseHandler(self)
+        self.apply_theme("dark")
 
     def attach_image(self):
         """파일 선택 다이얼로그로 이미지를 첨부합니다."""
@@ -411,7 +480,7 @@ class ChatWindow(QWidget):
 
         panel = QWidget()
         panel.setObjectName("sidebar_panel")
-        panel.setStyleSheet(SIDEBAR_STYLE)
+        panel.setStyleSheet(get_sidebar_style(self._current_theme))
         panel.setFixedWidth(SIDEBAR_WIDTH)
         panel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
 
@@ -432,11 +501,7 @@ class ChatWindow(QWidget):
         self.session_list_scroll.setWidgetResizable(True)
         self.session_list_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.session_list_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.session_list_scroll.setStyleSheet(
-            "QScrollArea { background: transparent; border: none; }"
-            "QScrollBar:vertical { width: 4px; background: rgba(255,255,255,10); }"
-            "QScrollBar::handle:vertical { background: rgba(255,255,255,80); border-radius: 2px; }"
-        )
+        self.session_list_scroll.setStyleSheet(get_sidebar_scroll_style(self._current_theme))
 
         self.session_list_content = QWidget()
         self.session_list_content.setStyleSheet("background: transparent;")
@@ -457,7 +522,7 @@ class ChatWindow(QWidget):
         panel_bottom_layout = QVBoxLayout()
         panel_bottom_layout.setSpacing(6)
         panel_bottom_layout.addWidget(self.settings_btn)
-        panel_bottom_layout.addWidget(self.close_btn)
+        panel_bottom_layout.addWidget(self.logout_btn)
         
         panel_layout.addLayout(panel_bottom_layout)
 
@@ -470,12 +535,12 @@ class ChatWindow(QWidget):
         if self._sidebar_expanded:
             self.sidebar_panel.show()
             self.resize(SIDEBAR_EXPANDED_WINDOW_WIDTH, self.height())
-            self.sidebar_toggle_btn.setText("✕")
+            self.sidebar_toggle_btn.setText("◀")
             self.sidebar_toggle_btn.setToolTip("채팅 목록 닫기")
         else:
             self.sidebar_panel.hide()
             self.resize(WINDOW_WIDTH, self.height())
-            self.sidebar_toggle_btn.setText("☰")
+            self.sidebar_toggle_btn.setText("▶")
             self.sidebar_toggle_btn.setToolTip("채팅 목록 열기/닫기")
 
         sync_pet_with_bubble(self, self.pet_window)
@@ -507,17 +572,18 @@ class ChatWindow(QWidget):
         # 만약 로컬에 이미 보존된 대화 이력이 있다면 즉시 복원 (사용자 경험/반응성 극대화)
         if session.bubbles:
             for snap in session.bubbles:
-                bubble = self._add_bubble(snap.html, snap.msg_type, add_to_session=False)
-                # 사고 과정 프로퍼티 복구
-                if snap.answer_html_content is not None:
-                    bubble.setProperty("answer_html_content", snap.answer_html_content)
-                if snap.thinking_html_content is not None:
-                    bubble.setProperty("thinking_html_content", snap.thinking_html_content)
+                thinking_widget = None
+                if snap.thinking_html_content:
+                    from app.chat_gui import ThinkingWidget
+                    thinking_widget = ThinkingWidget(snap.thinking_html_content)
+                    if snap.thinking_expanded:
+                        thinking_widget.set_expanded(True)
+                bubble = self._add_bubble(snap.html, snap.msg_type, add_to_session=False, thinking_widget=thinking_widget)
                 bubble.setProperty("thinking_expanded", snap.thinking_expanded)
             self.scrollToBottom()
         else:
             if session.session_id:
-                self._add_bubble(PET_MSG_FORMAT.format(text=f"세션({session.session_id[:6]}...)의 대화를 불러오는 중..."), "pet", add_to_session=False)
+                self._add_bubble(f"세션({session.session_id[:6]}...)의 대화를 불러오는 중...", "pet", add_to_session=False)
                 
         # 서버에 최신 대화 이력 동기화 요청
         if session.session_id:
@@ -536,12 +602,12 @@ class ChatWindow(QWidget):
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(2)
 
-        btn = QPushButton(f"💬 {session.title}")
-        btn.setStyleSheet(SESSION_ITEM_STYLE)
+        btn = QPushButton(f"{session.title}")
+        btn.setStyleSheet(get_session_item_style(self._current_theme))
         btn.setToolTip(session.title)
         btn.clicked.connect(lambda checked=False, s=session: self._on_session_clicked(s))
 
-        del_btn = QPushButton("🗑")
+        del_btn = QPushButton("X")
         del_btn.setFixedSize(28, 28)
         del_btn.setToolTip("이 세션 삭제")
         del_btn.setStyleSheet("""
@@ -576,7 +642,7 @@ class ChatWindow(QWidget):
         for item in self._session_item_btns:
             s, btn = item[0], item[1]
             if s is session:
-                btn.setText(f"💬 {session.title}")
+                btn.setText(f"{session.title}")
                 btn.setToolTip(session.title)
                 self._save_local_sessions()
                 break
@@ -586,9 +652,9 @@ class ChatWindow(QWidget):
         for item in self._session_item_btns:
             s, btn = item[0], item[1]
             if s is self.current_session:
-                btn.setStyleSheet(SESSION_ITEM_ACTIVE_STYLE)
+                btn.setStyleSheet(get_session_item_active_style(self._current_theme))
             else:
-                btn.setStyleSheet(SESSION_ITEM_STYLE)
+                btn.setStyleSheet(get_session_item_style(self._current_theme))
 
     def _on_session_clicked(self, session: ChatSession):
         """사이드바 세션 항목 클릭 시 해당 세션으로 전환합니다."""
@@ -692,34 +758,94 @@ class ChatWindow(QWidget):
         self.chat_client.send_message(payload)
                 
     def render_history(self, history: list[dict]):
+        local_bubbles = self.current_session.bubbles[:]
+        
+        # 로컬 버퍼가 서버 히스토리보다 최신(또는 동기화됨)이라면 화면 덮어쓰기를 생략합니다.
+        # (사고 과정 위젯 등의 로컬 전용 UI 상태를 보존하기 위함)
+        if len(local_bubbles) >= len(history) and len(history) > 0:
+            return
+
         self._clear_bubble_widgets()
-        # 로컬 세션의 bubbles 버퍼 초기화 (서버 응답 데이터로 대체)
         self.current_session.bubbles.clear()
         
         if not history:
-            self._add_bubble(PET_MSG_FORMAT.format(text="이전 대화가 없습니다."), "pet")
+            self._add_bubble("이전 대화가 없습니다.", "pet")
             return
-        for m in history:
+
+        from app.chat_session import BubbleSnapshot
+
+        for i, m in enumerate(history):
             role = m.get("role", "pet")
-            text = m.get("message", "")
+            if role == "assistant":
+                role = "pet"
+                
+            text = m.get("message") or m.get("content", "")
             images = m.get("images", [])
             formatted_text = text
             for img in images:
-                formatted_text += f"\n\n![이미지]({img})"
+                formatted_text += f"\n\n![\uc774\ubbf8\uc9c0]({img})"
+                
             html_content = convert_markdown_to_html(formatted_text)
             
-            # _add_bubble을 호출하면서 add_to_session=True 로 저장
-            self._add_bubble(
-                USER_MSG_FORMAT.format(text=html_content) if role == "user" else PET_MSG_FORMAT.format(text=html_content),
-                role,
-                add_to_session=True
-            )
+            thinking_widget = None
+            snap_thinking_html = ""
+            snap_thinking_expanded = False
+            
+            # 서버 히스토리와 로컬 스냅샷을 순서대로 매칭하여 사고 과정(Thinking) 정보 복구
+            if i < len(local_bubbles) and local_bubbles[i].msg_type == role:
+                snap = local_bubbles[i]
+                if snap.thinking_html_content:
+                    from app.chat_gui import ThinkingWidget
+                    thinking_widget = ThinkingWidget(snap.thinking_html_content)
+                    if snap.thinking_expanded:
+                        thinking_widget.set_expanded(True)
+                    snap_thinking_html = snap.thinking_html_content
+                    snap_thinking_expanded = snap.thinking_expanded
+                    
+            bubble = self._add_bubble(html_content, role, add_to_session=False, thinking_widget=thinking_widget)
+            if thinking_widget:
+                bubble.setProperty("thinking_expanded", snap_thinking_expanded)
+                
+            new_snap = BubbleSnapshot(html=html_content, msg_type=role)
+            new_snap.thinking_html_content = snap_thinking_html
+            new_snap.thinking_expanded = snap_thinking_expanded
+            self.current_session.bubbles.append(new_snap)
+
         self.scrollToBottom()
         
     def set_agent_busy(self, is_busy: bool):
+        self._is_agent_busy = is_busy
         self.input_field.setEnabled(not is_busy)
         self.attach_btn.setEnabled(not is_busy)
-        if not is_busy:
+        if is_busy:
+            self.send_btn.setText("중지 🚫")
+            self.send_btn.setEnabled(True)
+            self.send_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #C0392B;
+                    color: white;
+                    border-radius: 12px;
+                    font-weight: bold;
+                    font-size: 13px;
+                    padding: 8px 16px;
+                }
+                QPushButton:hover { background-color: #A93226; }
+            """)
+        else:
+            self.send_btn.setText("전송")
+            self.send_btn.setEnabled(True)
+            self.send_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #2979B0;
+                    color: white;
+                    border-radius: 12px;
+                    font-weight: bold;
+                    font-size: 13px;
+                    padding: 8px 16px;
+                }
+                QPushButton:hover { background-color: #1A5F8F; }
+                QPushButton:disabled { background-color: #7AA9C8; color: #DDDDDD; }
+            """)
             self.input_field.setFocus()
 
     # ── 내부 헬퍼 ─────────────────────────────────────────────────
@@ -748,6 +874,14 @@ class ChatWindow(QWidget):
 
 
     def send_message(self):
+        if self._is_agent_busy:
+            payload = {
+                "type": "stop",
+                "payload": {"session_id": self.current_session.session_id}
+            }
+            self.chat_client.send_message(payload)
+            return
+
         text = self.input_field.toPlainText().strip()
         images = self._encode_images()
         if not text and not images:
@@ -765,15 +899,12 @@ class ChatWindow(QWidget):
             for image_uri in images:
                 formatted_text += f"\n\n![이미지]({image_uri})"
 
-        # 마크다운을 HTML로 변환
         html_content = convert_markdown_to_html(formatted_text)
-        user_html = USER_MSG_FORMAT.format(text=html_content)
-        self._add_bubble(user_html, "user")
+        self._add_bubble(html_content, "user")
 
-        # [NEW] 즉시 펫의 초기 '요청 확인 중...' 버블 추가
         self._reset_stream_state()
         self._current_response_index = len(self.bubble_widgets)
-        self._add_bubble(PET_MSG_FORMAT.format(text="요청을 확인하고 있습니다..."), "pet", add_to_session=False)
+        self._add_bubble("요청을 확인하고 있습니다...", "pet", add_to_session=False)
 
         self.scrollToBottom()
         self.input_field.clear()
@@ -794,7 +925,7 @@ class ChatWindow(QWidget):
         self.chat_client.send_message(payload)
 
     # ── 말풍선 위젯 헬퍼 ─────────────────────────────────────────
-    def _add_bubble(self, html_content: str, msg_type: str = "pet", add_to_session: bool = True) -> QTextBrowser:
+    def _add_bubble(self, html_content: str, msg_type: str = "pet", add_to_session: bool = True, thinking_widget: 'ThinkingWidget | None' = None) -> QTextBrowser:
         """개별 말풍선 QTextBrowser 위젯을 컨테이너에 담아 추가합니다."""
         container = QWidget()
         vbox = QVBoxLayout(container)
@@ -813,27 +944,66 @@ class ChatWindow(QWidget):
                 label.setAlignment(Qt.AlignLeft)
             vbox.addWidget(label)
 
-        bubble = QTextBrowser()
-        bubble.setOpenExternalLinks(False)
-        bubble.anchorClicked.connect(self._on_bubble_link_clicked)
-        bubble.setHtml(html_content)
-        bubble.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        bubble.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        bubble.setProperty("msg_type", msg_type)
-        bubble.document().setDocumentMargin(0)
+        def apply_shadow(widget):
+            shadow = QGraphicsDropShadowEffect()
+            shadow.setBlurRadius(12)
+            shadow.setXOffset(0)
+            shadow.setYOffset(3)
+            shadow.setColor(QColor(0, 0, 0, 18))
+            widget.setGraphicsEffect(shadow)
 
-        if msg_type == "user":
-            bubble.setStyleSheet(USER_BUBBLE_STYLE)
-        elif msg_type == "error":
-            bubble.setStyleSheet(ERROR_BUBBLE_STYLE)
+        if msg_type == "pet":
+            bubble_frame = QFrame()
+            bubble_frame.setObjectName("thinking_bubble_frame")
+            bubble_frame.setAttribute(Qt.WA_StyledBackground, True)
+            bubble_frame.setStyleSheet(PET_BUBBLE_STYLE_WITH_THINKING)
+            frame_vbox = QVBoxLayout(bubble_frame)
+            frame_vbox.setContentsMargins(0, 0, 0, 0)
+            frame_vbox.setSpacing(0)
+
+            if thinking_widget is not None:
+                thinking_widget.make_transparent()
+                frame_vbox.addWidget(thinking_widget)
+
+            bubble = QTextBrowser()
+            bubble.setOpenExternalLinks(False)
+            bubble.anchorClicked.connect(self._on_bubble_link_clicked)
+            bubble.setHtml(html_content)
+            apply_markdown_css(bubble)
+            bubble.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            bubble.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            bubble.setProperty("msg_type", msg_type)
+            bubble.document().setDocumentMargin(0)
+            bubble.setStyleSheet(PET_BUBBLE_INNER_TEXT_STYLE)
+            bubble.setProperty("bubble_frame", bubble_frame)
+            fit_bubble_size(bubble, self.chat_scroll_area.viewport())
+            
+            frame_vbox.addWidget(bubble)
+            vbox.addWidget(bubble_frame)
+            apply_shadow(bubble_frame)
         else:
-            bubble.setStyleSheet(PET_BUBBLE_STYLE)
+            # ── 일반 버블 (user, error) ──
+            bubble = QTextBrowser()
+            bubble.setOpenExternalLinks(False)
+            bubble.anchorClicked.connect(self._on_bubble_link_clicked)
+            bubble.setHtml(html_content)
+            apply_markdown_css(bubble)
+            bubble.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            bubble.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            bubble.setProperty("msg_type", msg_type)
+            bubble.document().setDocumentMargin(0)
 
-        # 크기 조절 (너비: 내용 기반, 최대 70% / 높이: 내용 기반, 최대 BUBBLE_MAX_HEIGHT)
-        fit_bubble_size(bubble, self.chat_scroll_area.viewport())
-        vbox.addWidget(bubble)
+            if msg_type == "user":
+                bubble.setStyleSheet(USER_BUBBLE_STYLE)
+            elif msg_type == "error":
+                bubble.setStyleSheet(ERROR_BUBBLE_STYLE)
+            else:
+                bubble.setStyleSheet(PET_BUBBLE_STYLE)
 
-        # 정렬: 사용자=오른쪽, 펫=왼쪽, 에러=중앙
+            fit_bubble_size(bubble, self.chat_scroll_area.viewport())
+            vbox.addWidget(bubble)
+            apply_shadow(bubble)
+
         if msg_type == "user":
             alignment = Qt.AlignRight
         elif msg_type == "error":
@@ -841,17 +1011,16 @@ class ChatWindow(QWidget):
         else:
             alignment = Qt.AlignLeft
 
-        # stretch 앞에 컨테이너를 삽입
         idx = self.chat_scroll_layout.count() - 1
         self.chat_scroll_layout.insertWidget(idx, container, 0, alignment)
         self.bubble_widgets.append(bubble)
-        
-        # 삭제 등의 처리를 위해 컨테이너 참조 저장
+
         bubble.setProperty("container_widget", container)
-        
+        bubble.setProperty("thinking_widget", thinking_widget)
+
         if add_to_session:
             self.current_session.bubbles.append(BubbleSnapshot(html=html_content, msg_type=msg_type))
-            
+
         return bubble
 
 
@@ -860,7 +1029,9 @@ class ChatWindow(QWidget):
         if 0 <= index < len(self.bubble_widgets):
             bubble = self.bubble_widgets[index]
             bubble.setHtml(html_content)
+            apply_markdown_css(bubble)
             fit_bubble_size(bubble, self.chat_scroll_area.viewport())
+
             
             # 세션 스냅샷 업데이트
             if 0 <= index < len(self.current_session.bubbles):
@@ -883,34 +1054,9 @@ class ChatWindow(QWidget):
 
 
     def _on_bubble_link_clicked(self, url: QUrl):
-        """말풍선 내 링크 클릭 처리. 사고과정 토글 또는 외부 링크."""
+        """말풍선 내 링크 클릭 처리. 외부 링크 열기."""
         url_str = url.toString()
-        if url_str == "action:toggle_thinking":
-            bubble = self.sender()
-            if bubble is None:
-                return
-            expanded = bubble.property("thinking_expanded") or False
-            expanded = not expanded
-            bubble.setProperty("thinking_expanded", expanded)
-
-            answer_html = bubble.property("answer_html_content") or ""
-            thinking_html = bubble.property("thinking_html_content") or ""
-            new_html = render_thinking_html(answer_html, thinking_html, expanded)
-            bubble.setHtml(new_html)
-
-            # 펼친 상태에서는 높이 제한을 해제 (매우 큰 값으로 설정)
-            max_h = 10000 if expanded else BUBBLE_MAX_HEIGHT
-            fit_bubble_size(bubble, self.chat_scroll_area.viewport(), max_height=max_h)
-            self.scrollToBottom()
-
-            # 세션 스냅샷 상태 동기화
-            try:
-                idx = self.bubble_widgets.index(bubble)
-                if 0 <= idx < len(self.current_session.bubbles):
-                    self.current_session.bubbles[idx].thinking_expanded = expanded
-            except ValueError:
-                pass
-        else:
+        if not url_str.startswith("action:"):
             QDesktopServices.openUrl(url)
 
     def scrollToBottom(self):
@@ -923,13 +1069,9 @@ class ChatWindow(QWidget):
     def process_btn(self, choice: str):
         self.btn_area.hide()
         is_approved = (choice == "approved")
-        choice_text = "승인" if is_approved else "거절"
         
-        # 마크다운을 HTML로 변환
-        user_text = f"[{choice_text}] 하겠어."
-        html_user_text = convert_markdown_to_html(user_text)
-        user_msg = USER_MSG_FORMAT.format(text=html_user_text)
-        self._add_bubble(user_msg, "user")
+        text = "위험 작업 승인 확인" if is_approved else "위험 작업 거절 확인"
+        self._add_bubble(convert_markdown_to_html(text), "pet")
 
         self.set_agent_busy(True)
         self.scrollToBottom()
@@ -946,13 +1088,8 @@ class ChatWindow(QWidget):
 
     def on_error_occurred(self, error: str):
         safe_error = html.escape(error)
-        
-        # 마크다운 변환 (일관성 유지)
-        html_error = convert_markdown_to_html(safe_error)
-        error_msg = ERROR_MSG_FORMAT.format(text=html_error)
-        self._add_bubble(error_msg, "error")
+        self._add_bubble(f"⚠️ {safe_error}", "error")
         self.scrollToBottom()
-        
         self.input_field.setEnabled(True)
         self.attach_btn.setEnabled(True)
         self.input_field.setFocus()
@@ -999,6 +1136,46 @@ class ChatWindow(QWidget):
         else:
             self._drag_start_cursor_pos = None
             self._drag_start_window_pos = None
+
+    def apply_theme(self, theme_name: str):
+        """다크/화이트 테마를 채팅창 전체에 즉시 적용합니다."""
+        self._current_theme = DARK_THEME if theme_name == "dark" else LIGHT_THEME
+        theme = self._current_theme
+        is_dark = theme["name"] == "dark"
+
+        self.chat_scroll_area.setStyleSheet(get_chat_scroll_area_style(theme))
+        self.chat_scroll_content.setStyleSheet(f"background-color: {theme['scroll_bg']};")
+        self.input_field.setStyleSheet(get_input_field_style(theme))
+        self.sidebar_toggle_btn.setStyleSheet(get_sidebar_toggle_btn_style(theme))
+        self.settings_btn.setStyleSheet(get_settings_btn_style(theme))
+        self.new_chat_btn.setStyleSheet(get_sidebar_new_chat_btn_style(theme))
+        self.sidebar_panel.setStyleSheet(get_sidebar_style(theme))
+        self.session_list_scroll.setStyleSheet(get_sidebar_scroll_style(theme))
+
+        attach_color = "#E0E0E0" if is_dark else "#FFFFFF"
+        attach_text = "#333333"
+        self.attach_btn.setStyleSheet(f"""
+QPushButton {{
+    background-color: {attach_color};
+    color: {attach_text};
+    border-radius: 8px;
+    font-weight: bold;
+    font-size: 12px;
+    padding: 6px 12px;
+    border: 1px solid {'#3A3A3A' if is_dark else '#C8C8C8'};
+}}
+QPushButton:hover {{ background-color: {'#D0D0D0' if is_dark else '#EFEFEF'}; }}
+QPushButton:disabled {{ background-color: {'#2A2A2A' if is_dark else '#F5F5F5'}; color: #AAAAAA; }}
+""")
+
+        self.container.set_theme(theme)
+        self._update_session_highlight()
+
+        # 설정창이 열려 있으면 함께 테마 갱신
+        if hasattr(self, "settings_window") and self.settings_window.isVisible():
+            self.settings_window.update_theme(theme)
+
+        self.update()
 
     def open_settings(self):
         if not hasattr(self, 'settings_window') or not self.settings_window.isVisible():
@@ -1100,3 +1277,24 @@ class ChatWindow(QWidget):
         self._resize_start_global = None
         self._resize_start_geom = None
         self.unsetCursor()
+
+    def _handle_logout(self):
+        import requests
+        from PySide6.QtWidgets import QMessageBox
+        try:
+            response = requests.post("http://localhost:8001/api/logout", timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("status") == "success":
+                    QMessageBox.information(self, "로그아웃", "성공적으로 로그아웃 되었습니다.")
+                    if self.pet_window:
+                        self.pet_window._logged_in = False
+                    self.hide()
+                    if hasattr(self, 'settings_win') and self.settings_win:
+                        self.settings_win.close()
+                else:
+                    QMessageBox.warning(self, "로그아웃 실패", data.get("message", "알 수 없는 오류가 발생했습니다."))
+            else:
+                QMessageBox.warning(self, "로그아웃 실패", f"서버 오류: {response.status_code}")
+        except Exception as e:
+            QMessageBox.critical(self, "로그아웃 오류", f"로그아웃 요청 중 오류가 발생했습니다:\n{str(e)}")
