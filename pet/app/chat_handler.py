@@ -34,7 +34,7 @@ class ChatResponseHandler:
             self.window.input_field.setEnabled(False)
             self.window.attach_btn.setEnabled(False)
             message_text = payload.get("message", "승인이 필요합니다.")
-            self.window._add_bubble(f"⚠️ 승인 필요: {message_text}", "pet")
+            self.window._add_bubble(f"승인 필요: {message_text}", "pet")
             self.window.scrollToBottom()
 
         elif msg_type == "log":
@@ -45,7 +45,7 @@ class ChatResponseHandler:
                 self.window.on_error_occurred(payload.get("message", "알 수 없는 오류가 발생했습니다."))
             elif status == "info":
                 msg = payload.get("message", "")
-                self.window._add_bubble(f"ℹ️ 안내: {msg}", "pet")
+                self.window._add_bubble(f"안내: {msg}", "pet")
                 self.window.scrollToBottom()
             elif status == "node_start":
                 node_name = payload.get("node", "")
@@ -62,7 +62,7 @@ class ChatResponseHandler:
                     self._ensure_thinking_widget(thinking_html)
                     self.window._update_bubble(self.window._current_response_index, "")
                 else:
-                    self.window._thinking_logs.append(f"[⚙️ {node_name} 동작 중...]")
+                    self.window._thinking_logs.append(f"[{node_name} 동작 중...]")
                     thinking_content = "\n".join(self.window._thinking_logs)
                     thinking_html = convert_markdown_to_html(thinking_content)
                     self._ensure_thinking_widget(thinking_html)
@@ -74,7 +74,7 @@ class ChatResponseHandler:
                 tool_name = payload.get("tool_name", "unknown")
                 tool_input = payload.get("tool_input", "")
                 tool_input_str = json.dumps(tool_input, ensure_ascii=False) if isinstance(tool_input, dict) else str(tool_input) if tool_input else ""
-                log_entry = f"[🛠️ 도구 호출: {tool_name}]"
+                log_entry = f"[도구 호출: {tool_name}]"
                 if tool_input_str:
                     log_entry += f" 파라미터: {tool_input_str}"
 
@@ -170,8 +170,8 @@ class ChatResponseHandler:
 
         elif msg_type == "approval_response":
             approve = payload.get("approve", False)
-            text = "✅ 승인합니다. (서버/앱 연동)" if approve else "❌ 거절합니다. (서버/앱 연동)"
-            self.window._add_bubble(convert_markdown_to_html(text), "user")
+            text = "위험 작업 승인 확인" if approve else "위험 작업 거절 확인"
+            self.window._add_bubble(convert_markdown_to_html(text), "pet")
             self.window.scrollToBottom()
 
         elif msg_type == "session_sync":

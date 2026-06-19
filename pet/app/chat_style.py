@@ -207,7 +207,7 @@ BUBBLE_MAX_HEIGHT = 200
 # ── 메시지 포맷 상수 (스타일은 MARKDOWN_CSS + QSS가 담당) ──
 USER_MSG_FORMAT = "{text}"
 PET_MSG_FORMAT = "{text}"
-ERROR_MSG_FORMAT = "⚠️ {text}"
+ERROR_MSG_FORMAT = "{text}"
 FONT_FAMILY = "'Inter', 'Pretendard', 'Apple SD Gothic Neo', '-apple-system', 'BlinkMacSystemFont', 'Malgun Gothic', sans-serif"
 
 # ── QTextDocument 전용 마크다운 스타일시트 ──
@@ -309,7 +309,7 @@ def _bubble_style(bg_color: str, text_color: str = "#2C3E50", border_color: str 
 # ── 메시지 포맷 상수 (스타일은 MARKDOWN_CSS + QSS가 담당) ──
 USER_MSG_FORMAT = "{text}"
 PET_MSG_FORMAT = "{text}"
-ERROR_MSG_FORMAT = "⚠️ {text}"
+ERROR_MSG_FORMAT = "{text}"
 
 # 유저 챗 버블 (카카오톡 느낌의 노란색 + 은은한 테두리)
 USER_BUBBLE_STYLE = _bubble_style("#FEF01B", "#383100", "#E5CD00")
@@ -544,7 +544,8 @@ QLabel#login_field_label {{
 
 DARK_THEME = {
     "name": "dark",
-    "scroll_bg": "#222222",
+    "scroll_bg": "#1C1C1C",
+    "scroll_border": "#2A2A2A",
     "scroll_bar_track": "rgba(255,255,255,15)",
     "scroll_bar_handle": "rgba(255,255,255,150)",
     "scroll_bar_handle_hover": "rgba(255,255,255,200)",
@@ -583,7 +584,8 @@ DARK_THEME = {
 
 LIGHT_THEME = {
     "name": "light",
-    "scroll_bg": "#F2F2F2",
+    "scroll_bg": "#FAFAFA",
+    "scroll_border": "#EAEAEA",
     "scroll_bar_track": "rgba(0,0,0,10)",
     "scroll_bar_handle": "rgba(0,0,0,100)",
     "scroll_bar_handle_hover": "rgba(0,0,0,160)",
@@ -625,15 +627,18 @@ LIGHT_THEME = {
 
 def get_chat_scroll_area_style(theme: dict) -> str:
     bg = theme["scroll_bg"]
+    border = theme.get("scroll_border", "transparent")
     handle = theme["scroll_bar_handle"]
     handle_hover = theme["scroll_bar_handle_hover"]
     return f"""
 QScrollArea {{
     background-color: {bg};
-    border: none;
+    border: 1px solid {border};
+    border-radius: 14px;
 }}
 QWidget#chat_scroll_content {{
     background-color: {bg};
+    border-radius: 14px;
 }}
 QScrollBar:vertical {{
     border: none;
@@ -665,7 +670,7 @@ QTextEdit {{
     color: {theme["input_color"]};
     border-radius: 15px;
     border: 1px solid {theme["input_border"]};
-    padding: 8px 12px;
+    padding: 8px 12px 8px 52px;
     font-size: 13px;
 }}
 QTextEdit:focus {{

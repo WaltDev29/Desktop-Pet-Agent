@@ -181,7 +181,7 @@ class ChatWindow(QWidget):
         top_btn_layout = QHBoxLayout()
         top_btn_layout.setContentsMargins(0, 0, 0, 5)
 
-        self.sidebar_toggle_btn = QPushButton("☰")
+        self.sidebar_toggle_btn = QPushButton("▶")
         self.sidebar_toggle_btn.setStyleSheet(get_sidebar_toggle_btn_style(self._current_theme))
         self.sidebar_toggle_btn.setToolTip("채팅 목록 열기/닫기")
         self.sidebar_toggle_btn.clicked.connect(self._toggle_sidebar)
@@ -190,12 +190,32 @@ class ChatWindow(QWidget):
         self.new_chat_btn.setStyleSheet(NEW_CHAT_BTN_STYLE)
         self.new_chat_btn.clicked.connect(self.prepare_new_chat)
         
-        self.settings_btn = QPushButton("⚙️ 설정")
+        self.settings_btn = QPushButton("설정")
         self.settings_btn.setStyleSheet(get_settings_btn_style(self._current_theme))
         self.settings_btn.clicked.connect(self.open_settings)
         
+        self.top_close_btn = QPushButton("X")
+        self.top_close_btn.setFixedSize(28, 28)
+        self.top_close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #AAAAAA;
+                border: none;
+                font-size: 14px;
+                font-weight: bold;
+                border-radius: 6px;
+            }
+            QPushButton:hover {
+                background-color: rgba(220, 50, 50, 180);
+                color: white;
+            }
+        """)
+        self.top_close_btn.clicked.connect(self.close_program)
+        self.top_close_btn.setToolTip("프로그램 종료")
+
         top_btn_layout.addWidget(self.sidebar_toggle_btn)
         top_btn_layout.addStretch()
+        top_btn_layout.addWidget(self.top_close_btn)
 
         self.input_field = ChatInputField()
         self.input_field.setPlaceholderText("무엇을 도와드릴까요?")
@@ -220,18 +240,52 @@ class ChatWindow(QWidget):
         input_layout = QHBoxLayout()
         input_layout.setContentsMargins(0, 0, 0, 0)
         
-        self.attach_btn = QPushButton("파일 업로드")
-        self.attach_btn.setStyleSheet(ATTACH_BTN_STYLE)
+        self.attach_btn = QPushButton("📎", self.input_field)
+        self.attach_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                border: none;
+                font-size: 20px;
+                padding: 0px;
+            }
+            QPushButton:hover { background-color: rgba(255,255,255,15); border-radius: 6px; }
+            QPushButton:disabled { opacity: 0.4; }
+        """)
         self.attach_btn.setToolTip("이미지 첨부 (최대 3개)")
+        self.attach_btn.setFixedSize(36, 36)
+        self.attach_btn.move(8, 7)
         self.attach_btn.clicked.connect(self.attach_image)
 
-        input_layout.addWidget(self.attach_btn)
-        input_layout.addWidget(self.input_field)
+        self._is_agent_busy = False
+        self.send_btn = QPushButton("전송")
+        self.send_btn.setFixedHeight(50)
+        self.send_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2979B0;
+                color: white;
+                border-radius: 12px;
+                font-weight: bold;
+                font-size: 13px;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background-color: #1A5F8F;
+            }
+            QPushButton:disabled {
+                background-color: #7AA9C8;
+                color: #DDDDDD;
+            }
+        """)
+        self.send_btn.setToolTip("메시지 전송")
+        self.send_btn.clicked.connect(self.send_message)
 
-        # ── 하단 버튼 행 (종료 버튼) ──────────────────────────────────
-        self.close_btn = QPushButton("종료")
-        self.close_btn.setStyleSheet(CLOSE_BTN_STYLE)
-        self.close_btn.clicked.connect(self.close_program)
+        input_layout.addWidget(self.input_field)
+        input_layout.addWidget(self.send_btn, 0, Qt.AlignBottom)
+
+        # ── 하단 버튼 행 (로그아웃 버튼) ──────────────────────────────────
+        self.logout_btn = QPushButton("로그아웃")
+        self.logout_btn.setStyleSheet("background-color: #D32F2F; color: white; border-radius: 8px; font-size: 13px; font-weight: bold; padding: 8px 16px;")
+        self.logout_btn.clicked.connect(self._handle_logout)
 
 
         # ── 채팅 영역 위젯 (우측) ────────────────────────────
@@ -248,7 +302,7 @@ class ChatWindow(QWidget):
         # ── 수평 분할: 사이드바(좌) + 채팅 영역(우) ──────────
         inner_h_layout = QHBoxLayout()
         inner_h_layout.setContentsMargins(0, 0, 0, 0)
-        inner_h_layout.setSpacing(0)
+        inner_h_layout.setSpacing(12)
 
         self.sidebar_panel = self._build_sidebar()
         self.sidebar_panel.hide()  # 기본: 접혀 있음
@@ -468,7 +522,7 @@ class ChatWindow(QWidget):
         panel_bottom_layout = QVBoxLayout()
         panel_bottom_layout.setSpacing(6)
         panel_bottom_layout.addWidget(self.settings_btn)
-        panel_bottom_layout.addWidget(self.close_btn)
+        panel_bottom_layout.addWidget(self.logout_btn)
         
         panel_layout.addLayout(panel_bottom_layout)
 
@@ -481,12 +535,12 @@ class ChatWindow(QWidget):
         if self._sidebar_expanded:
             self.sidebar_panel.show()
             self.resize(SIDEBAR_EXPANDED_WINDOW_WIDTH, self.height())
-            self.sidebar_toggle_btn.setText("✕")
+            self.sidebar_toggle_btn.setText("◀")
             self.sidebar_toggle_btn.setToolTip("채팅 목록 닫기")
         else:
             self.sidebar_panel.hide()
             self.resize(WINDOW_WIDTH, self.height())
-            self.sidebar_toggle_btn.setText("☰")
+            self.sidebar_toggle_btn.setText("▶")
             self.sidebar_toggle_btn.setToolTip("채팅 목록 열기/닫기")
 
         sync_pet_with_bubble(self, self.pet_window)
@@ -548,12 +602,12 @@ class ChatWindow(QWidget):
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(2)
 
-        btn = QPushButton(f"💬 {session.title}")
+        btn = QPushButton(f"{session.title}")
         btn.setStyleSheet(get_session_item_style(self._current_theme))
         btn.setToolTip(session.title)
         btn.clicked.connect(lambda checked=False, s=session: self._on_session_clicked(s))
 
-        del_btn = QPushButton("🗑")
+        del_btn = QPushButton("X")
         del_btn.setFixedSize(28, 28)
         del_btn.setToolTip("이 세션 삭제")
         del_btn.setStyleSheet("""
@@ -588,7 +642,7 @@ class ChatWindow(QWidget):
         for item in self._session_item_btns:
             s, btn = item[0], item[1]
             if s is session:
-                btn.setText(f"💬 {session.title}")
+                btn.setText(f"{session.title}")
                 btn.setToolTip(session.title)
                 self._save_local_sessions()
                 break
@@ -760,9 +814,38 @@ class ChatWindow(QWidget):
         self.scrollToBottom()
         
     def set_agent_busy(self, is_busy: bool):
+        self._is_agent_busy = is_busy
         self.input_field.setEnabled(not is_busy)
         self.attach_btn.setEnabled(not is_busy)
-        if not is_busy:
+        if is_busy:
+            self.send_btn.setText("중지 🚫")
+            self.send_btn.setEnabled(True)
+            self.send_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #C0392B;
+                    color: white;
+                    border-radius: 12px;
+                    font-weight: bold;
+                    font-size: 13px;
+                    padding: 8px 16px;
+                }
+                QPushButton:hover { background-color: #A93226; }
+            """)
+        else:
+            self.send_btn.setText("전송")
+            self.send_btn.setEnabled(True)
+            self.send_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #2979B0;
+                    color: white;
+                    border-radius: 12px;
+                    font-weight: bold;
+                    font-size: 13px;
+                    padding: 8px 16px;
+                }
+                QPushButton:hover { background-color: #1A5F8F; }
+                QPushButton:disabled { background-color: #7AA9C8; color: #DDDDDD; }
+            """)
             self.input_field.setFocus()
 
     # ── 내부 헬퍼 ─────────────────────────────────────────────────
@@ -791,6 +874,14 @@ class ChatWindow(QWidget):
 
 
     def send_message(self):
+        if self._is_agent_busy:
+            payload = {
+                "type": "stop",
+                "payload": {"session_id": self.current_session.session_id}
+            }
+            self.chat_client.send_message(payload)
+            return
+
         text = self.input_field.toPlainText().strip()
         images = self._encode_images()
         if not text and not images:
@@ -978,10 +1069,9 @@ class ChatWindow(QWidget):
     def process_btn(self, choice: str):
         self.btn_area.hide()
         is_approved = (choice == "approved")
-        choice_text = "승인" if is_approved else "거절"
         
-        user_text = f"[{choice_text}] 하겠어."
-        self._add_bubble(convert_markdown_to_html(user_text), "user")
+        text = "위험 작업 승인 확인" if is_approved else "위험 작업 거절 확인"
+        self._add_bubble(convert_markdown_to_html(text), "pet")
 
         self.set_agent_busy(True)
         self.scrollToBottom()
@@ -1187,3 +1277,24 @@ QPushButton:disabled {{ background-color: {'#2A2A2A' if is_dark else '#F5F5F5'};
         self._resize_start_global = None
         self._resize_start_geom = None
         self.unsetCursor()
+
+    def _handle_logout(self):
+        import requests
+        from PySide6.QtWidgets import QMessageBox
+        try:
+            response = requests.post("http://localhost:8001/api/logout", timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("status") == "success":
+                    QMessageBox.information(self, "로그아웃", "성공적으로 로그아웃 되었습니다.")
+                    if self.pet_window:
+                        self.pet_window._logged_in = False
+                    self.hide()
+                    if hasattr(self, 'settings_win') and self.settings_win:
+                        self.settings_win.close()
+                else:
+                    QMessageBox.warning(self, "로그아웃 실패", data.get("message", "알 수 없는 오류가 발생했습니다."))
+            else:
+                QMessageBox.warning(self, "로그아웃 실패", f"서버 오류: {response.status_code}")
+        except Exception as e:
+            QMessageBox.critical(self, "로그아웃 오류", f"로그아웃 요청 중 오류가 발생했습니다:\n{str(e)}")

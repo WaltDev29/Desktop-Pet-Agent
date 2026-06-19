@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QFrame, QWidget, QTextEdit, QLabel, QPushButton, QHBoxLayout, QTextBrowser, QVBoxLayout, QSizePolicy
-from PySide6.QtCore import Qt, Signal, QPoint, QRectF, QTimer, QUrl
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap, QCursor, QDesktopServices
+from PySide6.QtCore import Qt, Signal, QPoint, QRectF, QTimer, QUrl, QByteArray
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap, QCursor, QDesktopServices, QTextCursor, QTextFormat, QImage, QTextDocument
 
 from app.chat_style import (
     IMAGE_REMOVE_BTN_STYLE,
@@ -44,7 +44,7 @@ class ImagePreviewItem(QWidget):
         if not pixmap.isNull():
             self.thumb.setPixmap(pixmap.scaled(60, 60, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         else:
-            self.thumb.setText("❌")
+            self.thumb.setText("X")
             self.thumb.setAlignment(Qt.AlignCenter)
 
         # 제거 버튼 (우상단 오버레이)
@@ -227,6 +227,68 @@ def fit_bubble_size(bubble: QTextBrowser, scroll_area_viewport, max_height: int 
     if scroll_w < 50:
         scroll_w = scroll_area_viewport.parent().width() - 20
     max_w = max(int(scroll_w * 0.7), 100)
+
+    # === 동적 이미지 크기 조절 ===
+    doc = bubble.document()
+    ORIG_W_PROP = QTextFormat.UserProperty + 1
+    ORIG_H_PROP = QTextFormat.UserProperty + 2
+
+    block = doc.begin()
+    while block.isValid():
+        iterator = block.begin()
+        while not iterator.atEnd():
+            fragment = iterator.fragment()
+            if fragment.isValid():
+                fmt = fragment.charFormat()
+                if fmt.isImageFormat():
+                    img_fmt = fmt.toImageFormat()
+                    img_name = img_fmt.name()
+                    
+                    orig_w = img_fmt.property(ORIG_W_PROP)
+                    orig_h = img_fmt.property(ORIG_H_PROP)
+                    
+                    if orig_w is None or orig_h is None:
+                        orig_w = 0
+                        orig_h = 0
+                        
+                        img_resource = doc.resource(QTextDocument.ImageResource, QUrl(img_name))
+                        if img_resource is not None:
+                            if hasattr(img_resource, 'width') and hasattr(img_resource, 'height'):
+                                orig_w = img_resource.width()
+                                orig_h = img_resource.height()
+                        
+                        if (orig_w == 0 or orig_h == 0) and img_name.startswith("data:image"):
+                            try:
+                                base64_data = img_name.split(",", 1)[1]
+                                temp_img = QImage()
+                                temp_img.loadFromData(QByteArray.fromBase64(base64_data.encode()))
+                                orig_w = temp_img.width()
+                                orig_h = temp_img.height()
+                            except Exception:
+                                pass
+                                
+                        if orig_w > 0 and orig_h > 0:
+                            img_fmt.setProperty(ORIG_W_PROP, orig_w)
+                            img_fmt.setProperty(ORIG_H_PROP, orig_h)
+                            
+                    if orig_w and orig_h and orig_w > 0 and orig_h > 0:
+                        target_w = max_w - 40
+                        if orig_w > target_w:
+                            new_w = target_w
+                            new_h = int(orig_h * (new_w / orig_w))
+                            img_fmt.setWidth(new_w)
+                            img_fmt.setHeight(new_h)
+                        else:
+                            img_fmt.setWidth(orig_w)
+                            img_fmt.setHeight(orig_h)
+                            
+                        cur = QTextCursor(doc)
+                        cur.setPosition(fragment.position())
+                        cur.setPosition(fragment.position() + fragment.length(), QTextCursor.KeepAnchor)
+                        cur.setCharFormat(img_fmt)
+            iterator += 1
+        block = block.next()
+    # ====================================
 
     # 문서의 이상적인 너비 계산 (내용에 맞는 최소 너비)
     bubble.document().setTextWidth(-1)  # 제한 없이 자연 너비 계산

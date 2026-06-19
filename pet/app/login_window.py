@@ -2,7 +2,7 @@ import os
 import requests
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QGraphicsDropShadowEffect
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QGraphicsDropShadowEffect, QMessageBox
 )
 from PySide6.QtCore import Qt, QPoint, Signal, QThread
 from PySide6.QtGui import QColor
@@ -136,14 +136,6 @@ class LoginWindow(QWidget):
         self.error_label.setWordWrap(True)
         self.error_label.hide()
 
-        self.success_label = QLabel("")
-        self.success_label.setStyleSheet(
-            f"color: #4CAF50; font-family: {FONT_FAMILY}; font-size: 11px;"
-        )
-        self.success_label.setAlignment(Qt.AlignCenter)
-        self.success_label.setWordWrap(True)
-        self.success_label.hide()
-
         self.login_btn = QPushButton("로그인")
         self.login_btn.setStyleSheet(LOGIN_BTN_STYLE)
         self.login_btn.clicked.connect(self._try_login)
@@ -159,7 +151,6 @@ class LoginWindow(QWidget):
         form_layout.addSpacing(4)
         form_layout.addWidget(password_label)
         form_layout.addWidget(self.password_input)
-        form_layout.addWidget(self.success_label)
         form_layout.addWidget(self.error_label)
         form_layout.addSpacing(8)
         form_layout.addWidget(self.login_btn)
@@ -189,20 +180,26 @@ class LoginWindow(QWidget):
     def _open_signup(self):
         from app.signup_window import SignupWindow
         self._signup_window = SignupWindow(self.pet_window)
-        self._signup_window.move(self.pos())
+        if hasattr(self, 'pet_window') and self.pet_window:
+            self.pet_window.signup_win = self._signup_window
+            self._signup_window.adjustSize()
+            pet = self.pet_window
+            pet_center_x = pet.x() + (pet.width() // 2)
+            signup_x = pet_center_x - (self._signup_window.width() // 2)
+            signup_y = pet.y() - self._signup_window.height() - 15
+            self._signup_window.move(signup_x, signup_y)
+        else:
+            self._signup_window.move(self.pos())
+            
         self._signup_window.go_to_login.connect(self._on_signup_success)
         self._signup_window.show()
         self.hide()
 
-    def _on_signup_success(self):
+    def _on_signup_success(self, success_status: bool = False):
         self.show()
-        self.show_signup_success("🎉 회원가입이 완료되었습니다! 로그인해주세요.")
-
-    def show_signup_success(self, message: str):
         self.error_label.hide()
-        self.success_label.setText(message)
-        self.success_label.show()
-        self.adjustSize()
+        if success_status:
+            QMessageBox.information(self, "알림", "회원가입이 완료되었습니다!")
 
     def _try_login(self):
         email = self.email_input.text().strip()

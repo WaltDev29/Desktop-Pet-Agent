@@ -46,7 +46,7 @@ class SignupWorker(QThread):
 
 
 class SignupWindow(QWidget):
-    go_to_login = Signal()
+    go_to_login = Signal(bool)
 
     def __init__(self, pet_window=None):
         super().__init__(pet_window)
@@ -114,6 +114,12 @@ class SignupWindow(QWidget):
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet(f"color: #E0E0E0; font-family: {FONT_FAMILY}; font-size: 18px; font-weight: bold;")
         form_layout.addWidget(title)
+        
+        info_label = QLabel("한 기기에 하나의 사용자만 회원 가입 가능합니다.")
+        info_label.setAlignment(Qt.AlignCenter)
+        info_label.setStyleSheet(f"color: #AAAAAA; font-family: {FONT_FAMILY}; font-size: 10px;")
+        form_layout.addWidget(info_label)
+        
         form_layout.addSpacing(10)
 
         name_label = QLabel("이름")
@@ -200,7 +206,7 @@ class SignupWindow(QWidget):
         os._exit(0)
 
     def _go_back_to_login(self):
-        self.go_to_login.emit()
+        self.go_to_login.emit(False)
         self.close()
 
     def _validate(self) -> str | None:
@@ -248,9 +254,11 @@ class SignupWindow(QWidget):
         self.signup_btn.setText("회원가입")
 
         if success:
-            self.go_to_login.emit()
+            self.go_to_login.emit(True)
             self.close()
         else:
+            if "signup" in message.lower() or "device" in message.lower() or "exist" in message.lower() or "이미" in message:
+                message = "한 기기에 하나의 사용자만 회원 가입 가능합니다."
             self.error_label.setText(message)
             self.error_label.show()
             self.adjustSize()

@@ -1,8 +1,13 @@
+import json
+import os
+
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QPushButton, QGraphicsDropShadowEffect, QFrame, QMessageBox
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QPushButton,
+    QGraphicsDropShadowEffect, QFrame, QMessageBox, QDialog,
+    QTextEdit, QDialogButtonBox
 )
 from PySide6.QtCore import Qt, QPoint
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QFont
 from app.chat_style import (
     CLOSE_BTN_STYLE,
     get_settings_window_style,
@@ -11,6 +16,10 @@ from app.chat_style import (
     DARK_THEME,
 )
 import requests
+
+CONFIG_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "..", "agent", "agent_server", "config.json"
+)
 
 class SettingsWindow(QWidget):
     def __init__(self, chat_window, pet_window=None):
@@ -42,26 +51,23 @@ class SettingsWindow(QWidget):
         self.title_label = QLabel("설정")
         self.title_label.setAlignment(Qt.AlignCenter)
 
-        # 테마 선택
         self.theme_label = QLabel("채팅창 테마:")
         theme_btn_layout = QHBoxLayout()
         theme_btn_layout.setSpacing(8)
 
-        self.dark_theme_btn = QPushButton("🌙 다크")
-        self.light_theme_btn = QPushButton("☀️ 화이트")
+        self.dark_theme_btn = QPushButton("다크")
+        self.light_theme_btn = QPushButton("화이트")
         self.dark_theme_btn.clicked.connect(lambda: self._apply_theme("dark"))
         self.light_theme_btn.clicked.connect(lambda: self._apply_theme("light"))
         theme_btn_layout.addWidget(self.dark_theme_btn)
         theme_btn_layout.addWidget(self.light_theme_btn)
 
-        # 채팅창 투명도
         self.chat_opacity_label = QLabel("채팅창 투명도:")
         self.chat_opacity_slider = QSlider(Qt.Horizontal)
         self.chat_opacity_slider.setRange(20, 100)
         self.chat_opacity_slider.setValue(int(self.chat_window.windowOpacity() * 100))
         self.chat_opacity_slider.valueChanged.connect(self.set_chat_opacity)
 
-        # 펫 투명도
         self.pet_opacity_label = QLabel("펫 투명도:")
         self.pet_opacity_slider = QSlider(Qt.Horizontal)
         self.pet_opacity_slider.setRange(20, 100)
@@ -80,34 +86,31 @@ class SettingsWindow(QWidget):
         layout.addWidget(self.chat_opacity_slider)
         layout.addWidget(self.pet_opacity_label)
         layout.addWidget(self.pet_opacity_slider)
-        
-        # 로그아웃 버튼
-        self.logout_btn = QPushButton("로그아웃")
-        self.logout_btn.setStyleSheet("background-color: #D32F2F; color: white; border-radius: 8px; font-size: 13px; font-weight: bold; padding: 8px 16px;")
-        self.logout_btn.clicked.connect(self._handle_logout)
-        layout.addWidget(self.logout_btn)
-        
+
+        self.mcp_btn = QPushButton("mcp 설정 관리")
+        self.mcp_btn.setStyleSheet("background-color: #2979B0; color: white; border-radius: 8px; font-size: 13px; font-weight: bold; padding: 8px 16px;")
+        self.mcp_btn.clicked.connect(self._manage_mcp_settings)
+        layout.addWidget(self.mcp_btn)
+
         layout.addStretch()
 
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
         btn_layout.addWidget(self.close_btn)
+        btn_layout.addStretch()
         layout.addLayout(btn_layout)
 
         main_layout.addWidget(self.container)
 
         self.resize(260, 380)
 
-        # 현재 채팅창 테마 적용
         current_theme = getattr(self.chat_window, "_current_theme", DARK_THEME)
         self.update_theme(current_theme)
 
-        # 채팅창 옆에 위치시키기
         geom = self.chat_window.geometry()
         self.move(geom.x() + geom.width() + 10, geom.y())
 
     def update_theme(self, theme: dict):
-        """채팅창 테마에 맞게 설정창 전체 UI를 업데이트합니다."""
         is_dark = theme["name"] == "dark"
 
         self.container.setStyleSheet(get_settings_window_style(theme))
@@ -171,17 +174,177 @@ class SettingsWindow(QWidget):
         self._drag_start_cursor_pos = None
         self._drag_start_window_pos = None
 
-    def _handle_logout(self):
+    def _manage_mcp_settings(self):
+        self.chat_window.setEnabled(False)
+        self.setEnabled(False)
+
+        editor = MCPConfigEditor(self)
+        editor.finished.connect(self._on_mcp_editor_closed)
+        editor.show()
+
+    def _on_mcp_editor_closed(self):
+        self.setEnabled(True)
+        self.chat_window.setEnabled(True)
+        self.raise_()
+        self.activateWindow()
+
+
+class MCPConfigEditor(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("MCP 설정 관리")
+        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.resize(540, 440)
+
+        self._drag_start_window_pos = None
+        self._drag_start_cursor_pos = None
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(12, 12, 12, 12)
+
+        self._container = QFrame(self)
+        self._container.setObjectName("mcp_editor_container")
+        self._container.setStyleSheet("""
+            QFrame#mcp_editor_container {
+                background-color: #23272E;
+                border-radius: 14px;
+                border: 1px solid #3A3F4B;
+            }
+        """)
+
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(18)
+        shadow.setColor(QColor(0, 0, 0, 120))
+        shadow.setOffset(0, 6)
+        self._container.setGraphicsEffect(shadow)
+
+        layout = QVBoxLayout(self._container)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+
+        title = QLabel("⚙️  MCP 설정 (config.json)")
+        title.setStyleSheet("color: #E0E0E0; font-size: 14px; font-weight: bold;")
+        layout.addWidget(title)
+
+        hint = QLabel("JSON 형식으로 직접 편집할 수 있습니다. 저장 시 유효성 검사가 실행됩니다.")
+        hint.setStyleSheet("color: #888; font-size: 11px;")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        self._editor = QTextEdit()
+        self._editor.setStyleSheet("""
+            QTextEdit {
+                background-color: #1A1D23;
+                color: #ABB2BF;
+                border: 1px solid #3A3F4B;
+                border-radius: 8px;
+                font-family: 'Courier New', monospace;
+                font-size: 12.5px;
+                padding: 10px;
+                line-height: 1.5;
+            }
+        """)
+        font = QFont("Courier New")
+        font.setPointSize(11)
+        self._editor.setFont(font)
+        self._editor.setAcceptRichText(False)
+        layout.addWidget(self._editor, 1)
+
+        self._status_label = QLabel("")
+        self._status_label.setStyleSheet("font-size: 11px; padding: 2px 0;")
+        self._status_label.setWordWrap(True)
+        layout.addWidget(self._status_label)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+
+        self._save_btn = QPushButton("저장")
+        self._save_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2979B0;
+                color: white;
+                border-radius: 8px;
+                font-size: 13px;
+                font-weight: bold;
+                padding: 8px 24px;
+            }
+            QPushButton:hover { background-color: #1A5F8F; }
+        """)
+        self._save_btn.clicked.connect(self._save)
+
+        self._cancel_btn = QPushButton("닫기")
+        self._cancel_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3A3F4B;
+                color: #CCCCCC;
+                border-radius: 8px;
+                font-size: 13px;
+                font-weight: bold;
+                padding: 8px 24px;
+            }
+            QPushButton:hover { background-color: #4A505E; }
+        """)
+        self._cancel_btn.clicked.connect(self.close)
+
+        btn_row.addStretch()
+        btn_row.addWidget(self._save_btn)
+        btn_row.addWidget(self._cancel_btn)
+        layout.addLayout(btn_row)
+
+        outer.addWidget(self._container)
+
+        self._load()
+
+    def _config_path(self) -> str:
+        return os.path.normpath(CONFIG_PATH)
+
+    def _load(self):
+        path = self._config_path()
         try:
-            response = requests.post("http://localhost:8001/api/logout", timeout=5)
-            if response.status_code == 200:
-                data = response.json()
-                if data.get("status") == "success":
-                    QMessageBox.information(self, "로그아웃", "성공적으로 로그아웃 되었습니다.")
-                    self.close()
-                else:
-                    QMessageBox.warning(self, "로그아웃 실패", data.get("message", "알 수 없는 오류가 발생했습니다."))
-            else:
-                QMessageBox.warning(self, "로그아웃 실패", f"서버 오류: {response.status_code}")
+            with open(path, "r", encoding="utf-8") as f:
+                raw = f.read()
+            parsed = json.loads(raw)
+            self._editor.setPlainText(json.dumps(parsed, indent=2, ensure_ascii=False))
+            self._set_status("", ok=True)
+        except FileNotFoundError:
+            self._editor.setPlainText("{}")
+            self._set_status(f"파일을 찾을 수 없습니다: {path}", ok=False)
+        except json.JSONDecodeError as e:
+            self._editor.setPlainText(raw)
+            self._set_status(f"기존 파일이 올바른 JSON이 아닙니다: {e}", ok=False)
+
+    def _save(self):
+        text = self._editor.toPlainText().strip()
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as e:
+            self._set_status(f"❌ JSON 오류: {e}", ok=False)
+            return
+
+        path = self._config_path()
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(parsed, f, indent=2, ensure_ascii=False)
+            self._set_status("✅ 저장 완료!", ok=True)
         except Exception as e:
-            QMessageBox.critical(self, "로그아웃 오류", f"로그아웃 요청 중 오류가 발생했습니다:\n{str(e)}")
+            self._set_status(f"❌ 저장 실패: {e}", ok=False)
+
+    def _set_status(self, msg: str, ok: bool = True):
+        color = "#4CAF50" if ok else "#FF6B6B"
+        self._status_label.setStyleSheet(f"font-size: 11px; color: {color}; padding: 2px 0;")
+        self._status_label.setText(msg)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_start_cursor_pos = event.globalPosition().toPoint()
+            self._drag_start_window_pos = self.pos()
+
+    def mouseMoveEvent(self, event):
+        if self._drag_start_cursor_pos is not None:
+            delta = event.globalPosition().toPoint() - self._drag_start_cursor_pos
+            self.move(self._drag_start_window_pos + delta)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_start_cursor_pos = None
+        self._drag_start_window_pos = None

@@ -70,8 +70,8 @@ class PetWindow(QWidget):
         self.min_y = height * MOVEMENT_Y_MIN_RATIO
         self.max_y = height * MOVEMENT_Y_MAX_RATIO - self.height()
 
-        self.curr_x = random.uniform(self.min_x, self.max_x)
-        self.curr_y = random.uniform(self.min_y, self.max_y)
+        self.curr_x = (width - self.width()) / 2
+        self.curr_y = (height - self.height()) * 0.75
         self.move(int(self.curr_x), int(self.curr_y))
 
         self.timer = QTimer(self)
@@ -95,6 +95,7 @@ class PetWindow(QWidget):
         self._drag_start_pet: QPoint | None = None
         self._drag_start_chat: QPoint | None = None
         self._drag_start_login: QPoint | None = None
+        self._drag_start_signup: QPoint | None = None
 
         if already_logged_in:
             QTimer.singleShot(100, self._on_login_success)
@@ -162,6 +163,10 @@ class PetWindow(QWidget):
         self._drag_start_pet = self.pos()
         self._drag_start_chat = self.chat_win.pos() if self.chat_win.isVisible() else None
         self._drag_start_login = self.login_win.pos() if self.login_win.isVisible() else None
+        if hasattr(self, 'signup_win') and self.signup_win.isVisible():
+            self._drag_start_signup = self.signup_win.pos()
+        else:
+            self._drag_start_signup = None
 
     def do_drag(self, cursor_global: QPoint):
         """드래그 중: 커서 delta만큼 펫·채팅창을 함께 이동합니다."""
@@ -176,6 +181,9 @@ class PetWindow(QWidget):
             self.chat_win.move(self._drag_start_chat + delta)
         if self._drag_start_login is not None:
             self.login_win.move(self._drag_start_login + delta)
+        if hasattr(self, '_drag_start_signup') and self._drag_start_signup is not None:
+            if hasattr(self, 'signup_win'):
+                self.signup_win.move(self._drag_start_signup + delta)
 
     def end_drag(self):
         """드래그 종료: 상태 초기화 후 자동이동 재개."""
@@ -184,17 +192,22 @@ class PetWindow(QWidget):
         self._drag_start_pet = None
         self._drag_start_chat = None
         self._drag_start_login = None
+        self._drag_start_signup = None
         self.timer.start(16)
 
     def interact_with_pet(self):
         if not self._logged_in:
-            self.is_interacting = True
-            pet_center_x = self.x() + (self.width() // 2)
-            login_x = pet_center_x - (self.login_win.width() // 2)
-            login_y = self.y() - self.login_win.height() - 15
-            self.login_win.move(login_x, login_y)
-            self.login_win.show()
-            self.login_win.email_input.setFocus()
+            if self.login_win.isVisible():
+                self.is_interacting = False
+                self.login_win.hide()
+            else:
+                self.is_interacting = True
+                pet_center_x = self.x() + (self.width() // 2)
+                login_x = pet_center_x - (self.login_win.width() // 2)
+                login_y = self.y() - self.login_win.height() - 15
+                self.login_win.move(login_x, login_y)
+                self.login_win.show()
+                self.login_win.email_input.setFocus()
             return
 
         self.is_interacting = not self.is_interacting
