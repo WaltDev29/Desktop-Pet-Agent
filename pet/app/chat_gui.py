@@ -44,7 +44,7 @@ class ImagePreviewItem(QWidget):
         if not pixmap.isNull():
             self.thumb.setPixmap(pixmap.scaled(60, 60, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         else:
-            self.thumb.setText("X")
+            self.thumb.setText("❌")
             self.thumb.setAlignment(Qt.AlignCenter)
 
         # 제거 버튼 (우상단 오버레이)

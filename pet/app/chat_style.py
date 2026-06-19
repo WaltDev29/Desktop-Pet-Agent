@@ -207,7 +207,7 @@ BUBBLE_MAX_HEIGHT = 200
 # ── 메시지 포맷 상수 (스타일은 MARKDOWN_CSS + QSS가 담당) ──
 USER_MSG_FORMAT = "{text}"
 PET_MSG_FORMAT = "{text}"
-ERROR_MSG_FORMAT = "{text}"
+ERROR_MSG_FORMAT = "⚠️ {text}"
 FONT_FAMILY = "'Inter', 'Pretendard', 'Apple SD Gothic Neo', '-apple-system', 'BlinkMacSystemFont', 'Malgun Gothic', sans-serif"
 
 # ── QTextDocument 전용 마크다운 스타일시트 ──
@@ -309,7 +309,7 @@ def _bubble_style(bg_color: str, text_color: str = "#2C3E50", border_color: str 
 # ── 메시지 포맷 상수 (스타일은 MARKDOWN_CSS + QSS가 담당) ──
 USER_MSG_FORMAT = "{text}"
 PET_MSG_FORMAT = "{text}"
-ERROR_MSG_FORMAT = "{text}"
+ERROR_MSG_FORMAT = "⚠️ {text}"
 
 # 유저 챗 버블 (카카오톡 느낌의 노란색 + 은은한 테두리)
 USER_BUBBLE_STYLE = _bubble_style("#FEF01B", "#383100", "#E5CD00")

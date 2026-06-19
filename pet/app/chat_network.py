@@ -1,15 +1,12 @@
 import threading
 import json
-import uuid as _uuid
 
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QObject, Signal
 
 class ChatSignaler(QObject):
     response_received = Signal(dict)
     error_occurred = Signal(str)
     connected = Signal()
-    remote_connected = Signal()
-    pc_list_received = Signal(list)
 
 class ChatClient(QObject):
     def __init__(self, ws_url="ws://localhost:8001/ws", parent=None):
@@ -20,7 +17,6 @@ class ChatClient(QObject):
         self.ws_conn = None
         self._ws_lock = threading.Lock()
         self._is_running = True
-        self._remote_mode = False
         self._start_websocket_thread()
 
     def _start_websocket_thread(self):
@@ -33,18 +29,17 @@ class ChatClient(QObject):
             with connect(self.ws_url) as websocket:
                 with self._ws_lock:
                     self.ws_conn = websocket
+                
+                self.signaler.connected.emit()
 
-                if self._remote_mode:
-                    self.signaler.remote_connected.emit()
-                else:
-                    self.signaler.connected.emit()
-
+                # 연결 직후 register 메시지 전송 → 서버가 session_sync로 역대 세션 목록을 응답
                 register_msg = json.dumps({
                     "type": "register",
                     "payload": {"role": "app", "client_id": "pet-desktop"}
                 })
                 websocket.send(register_msg)
 
+                # Listen continuously
                 while self._is_running:
                     try:
                         message = websocket.recv()
@@ -61,79 +56,10 @@ class ChatClient(QObject):
             with self._ws_lock:
                 self.ws_conn = None
 
-    def connect_to_remote(self, ws_url: str, token: str, target_agent_id: str):
-        """기존 WS를 닫고 원격 게이트웨이에 app 역할로 재연결합니다."""
-        self._is_running = False
-        with self._ws_lock:
-            if self.ws_conn:
-                try:
-                    self.ws_conn.close()
-                except Exception:
-                    pass
-                self.ws_conn = None
-
-        self._is_running = True
-        self._remote_mode = True
-
-        def _remote_worker():
-            from websockets.sync.client import connect
-            full_url = f"{ws_url}?token={token}"
-            client_id = str(_uuid.uuid4())
-            try:
-                with connect(full_url) as websocket:
-                    with self._ws_lock:
-                        self.ws_conn = websocket
-
-                    self.signaler.remote_connected.emit()
-
-                    register_msg = json.dumps({
-                        "type": "register",
-                        "payload": {
-                            "role": "app",
-                            "client_id": client_id,
-                            "target_agent_id": target_agent_id
-                        }
-                    })
-                    websocket.send(register_msg)
-
-                    while self._is_running:
-                        try:
-                            message = websocket.recv()
-                            data = json.loads(message)
-                            self.signaler.response_received.emit(data)
-                        except Exception as e:
-                            if self._is_running:
-                                print(f"원격 WebSocket 닫힘: {e}")
-                            break
-            except Exception as e:
-                if self._is_running:
-                    self.signaler.error_occurred.emit(f"원격 연결 실패: {e}")
-            finally:
-                with self._ws_lock:
-                    self.ws_conn = None
-
-        threading.Thread(target=_remote_worker, daemon=True).start()
-
-    def reconnect_local(self, ws_url: str):
-        """원격 연결을 끊고 로컬 WS로 복귀합니다."""
-        self._is_running = False
-        with self._ws_lock:
-            if self.ws_conn:
-                try:
-                    self.ws_conn.close()
-                except Exception:
-                    pass
-                self.ws_conn = None
-
-        self._is_running = True
-        self._remote_mode = False
-        self.ws_url = ws_url
-        self._start_websocket_thread()
-
     def send_message(self, payload: dict):
         if self.session_id:
             payload["session_id"] = self.session_id
-
+        
         def _do_send():
             with self._ws_lock:
                 if self.ws_conn:
