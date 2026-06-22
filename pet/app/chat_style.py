@@ -580,6 +580,7 @@ DARK_THEME = {
     "bubble_frame_border": "#555555",
     "new_chat_btn_bg": "#2979B0",
     "new_chat_btn_hover_bg": "#1A5F8F",
+    "icon_color": "#AAAAAA",
 }
 
 LIGHT_THEME = {
@@ -620,6 +621,7 @@ LIGHT_THEME = {
     "bubble_frame_border": "#C8C8C8",
     "new_chat_btn_bg": "#2979B0",
     "new_chat_btn_hover_bg": "#1A5F8F",
+    "icon_color": "#555555",
 }
 
 

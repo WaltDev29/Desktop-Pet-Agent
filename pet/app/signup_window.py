@@ -5,8 +5,9 @@ import requests
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QGraphicsDropShadowEffect
 )
-from PySide6.QtCore import Qt, QPoint, Signal, QThread
-from PySide6.QtGui import QColor
+from PySide6.QtCore import Qt, QPoint, Signal, QThread, QByteArray, QSize
+from PySide6.QtGui import QColor, QIcon, QPainter
+from PySide6.QtSvg import QSvgRenderer
 
 from app.chat_gui import BubbleFrame
 from app.chat_style import (
@@ -14,6 +15,25 @@ from app.chat_style import (
 )
 
 AGENT_BASE_URL = "http://localhost:8001"
+
+_ICON_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icon")
+
+
+def _make_svg_icon(name: str, color: str, size: int = 18) -> QIcon:
+    path = os.path.join(_ICON_DIR, f"{name}.svg")
+    with open(path, "r", encoding="utf-8") as f:
+        svg = f.read()
+    svg = re.sub(r'fill="[^"]*"', f'fill="{color}"', svg)
+    svg = re.sub(r'<path(?![^>]*fill=)', f'<path fill="{color}"', svg)
+    ba = QByteArray(svg.encode("utf-8"))
+    renderer = QSvgRenderer(ba)
+    from PySide6.QtGui import QPixmap
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    renderer.render(painter)
+    painter.end()
+    return QIcon(pixmap)
 
 
 class SignupWorker(QThread):
@@ -80,20 +100,18 @@ class SignupWindow(QWidget):
         # 상단: X 종료 버튼
         top_bar = QHBoxLayout()
         top_bar.setContentsMargins(0, 0, 0, 0)
-        x_btn = QPushButton("✕")
+        x_btn = QPushButton()
         x_btn.setFixedSize(28, 28)
+        x_btn.setIconSize(QSize(14, 14))
+        x_btn.setIcon(_make_svg_icon("ic_x_1", "#AAAAAA", 14))
         x_btn.setStyleSheet("""
             QPushButton {
                 background-color: transparent;
-                color: #AAAAAA;
                 border: none;
-                font-size: 13px;
-                font-weight: bold;
                 border-radius: 6px;
             }
             QPushButton:hover {
                 background-color: rgba(220, 50, 50, 180);
-                color: white;
             }
         """)
         x_btn.clicked.connect(self._close_app)
