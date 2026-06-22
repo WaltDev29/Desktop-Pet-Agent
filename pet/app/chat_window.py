@@ -2,6 +2,7 @@ import html
 import json
 import base64
 import os
+import re
 import uuid
 
 from PySide6.QtWidgets import (
@@ -9,8 +10,9 @@ from PySide6.QtWidgets import (
     QApplication, QGraphicsDropShadowEffect, QLabel, QFrame,
     QFileDialog, QScrollArea, QSlider, QMessageBox
 )
-from PySide6.QtCore import Qt, Signal, QPoint, QTimer, QEvent, QRect, QUrl, QSettings
-from PySide6.QtGui import QColor, QPixmap, QCursor, QDesktopServices
+from PySide6.QtCore import Qt, Signal, QPoint, QTimer, QEvent, QRect, QUrl, QSettings, QByteArray, QSize
+from PySide6.QtGui import QColor, QPixmap, QCursor, QDesktopServices, QIcon, QPainter
+from PySide6.QtSvg import QSvgRenderer
 
 from app.chat_style import (
     CHAT_HISTORY_STYLE,
@@ -70,6 +72,24 @@ from app.chat_gui import (
 
 MAX_IMAGES = 3
 SIDEBAR_ANIM_DURATION = 180  # 사이드바 애니메이션 시간(ms)
+
+_ICON_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "icon")
+
+
+def _make_svg_icon(name: str, color: str, size: int = 18) -> QIcon:
+    path = os.path.join(_ICON_DIR, f"{name}.svg")
+    with open(path, "r", encoding="utf-8") as f:
+        svg = f.read()
+    svg = re.sub(r'fill="[^"]*"', f'fill="{color}"', svg)
+    svg = re.sub(r'<path(?![^>]*fill=)', f'<path fill="{color}"', svg)
+    ba = QByteArray(svg.encode("utf-8"))
+    renderer = QSvgRenderer(ba)
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    renderer.render(painter)
+    painter.end()
+    return QIcon(pixmap)
 
 
 class ChatWindow(QWidget):
@@ -181,9 +201,10 @@ class ChatWindow(QWidget):
         top_btn_layout = QHBoxLayout()
         top_btn_layout.setContentsMargins(0, 0, 0, 5)
 
-        self.sidebar_toggle_btn = QPushButton("▶")
+        self.sidebar_toggle_btn = QPushButton()
         self.sidebar_toggle_btn.setStyleSheet(get_sidebar_toggle_btn_style(self._current_theme))
         self.sidebar_toggle_btn.setToolTip("채팅 목록 열기/닫기")
+        self.sidebar_toggle_btn.setIconSize(QSize(18, 18))
         self.sidebar_toggle_btn.clicked.connect(self._toggle_sidebar)
         
         self.new_chat_btn = QPushButton("신규 채팅")
@@ -194,20 +215,17 @@ class ChatWindow(QWidget):
         self.settings_btn.setStyleSheet(get_settings_btn_style(self._current_theme))
         self.settings_btn.clicked.connect(self.open_settings)
         
-        self.top_close_btn = QPushButton("X")
+        self.top_close_btn = QPushButton()
         self.top_close_btn.setFixedSize(28, 28)
+        self.top_close_btn.setIconSize(QSize(14, 14))
         self.top_close_btn.setStyleSheet("""
             QPushButton {
                 background-color: transparent;
-                color: #AAAAAA;
                 border: none;
-                font-size: 14px;
-                font-weight: bold;
                 border-radius: 6px;
             }
             QPushButton:hover {
                 background-color: rgba(220, 50, 50, 180);
-                color: white;
             }
         """)
         self.top_close_btn.clicked.connect(self.close_program)
@@ -240,12 +258,11 @@ class ChatWindow(QWidget):
         input_layout = QHBoxLayout()
         input_layout.setContentsMargins(0, 0, 0, 0)
         
-        self.attach_btn = QPushButton("📎", self.input_field)
+        self.attach_btn = QPushButton(self.input_field)
         self.attach_btn.setStyleSheet("""
             QPushButton {
                 background-color: transparent;
                 border: none;
-                font-size: 20px;
                 padding: 0px;
             }
             QPushButton:hover { background-color: rgba(255,255,255,15); border-radius: 6px; }
@@ -253,27 +270,25 @@ class ChatWindow(QWidget):
         """)
         self.attach_btn.setToolTip("이미지 첨부 (최대 3개)")
         self.attach_btn.setFixedSize(36, 36)
+        self.attach_btn.setIconSize(QSize(20, 20))
         self.attach_btn.move(8, 7)
         self.attach_btn.clicked.connect(self.attach_image)
 
         self._is_agent_busy = False
-        self.send_btn = QPushButton("전송")
-        self.send_btn.setFixedHeight(50)
+        self.send_btn = QPushButton()
+        self.send_btn.setFixedSize(50, 50)
+        self.send_btn.setIconSize(QSize(22, 22))
         self.send_btn.setStyleSheet("""
             QPushButton {
                 background-color: #2979B0;
-                color: white;
                 border-radius: 12px;
-                font-weight: bold;
-                font-size: 13px;
-                padding: 8px 16px;
+                padding: 8px;
             }
             QPushButton:hover {
                 background-color: #1A5F8F;
             }
             QPushButton:disabled {
                 background-color: #7AA9C8;
-                color: #DDDDDD;
             }
         """)
         self.send_btn.setToolTip("메시지 전송")
@@ -532,15 +547,16 @@ class ChatWindow(QWidget):
         """사이드바를 접거나 펼칩니다. 창 너비도 함께 조정합니다."""
         self._sidebar_expanded = not self._sidebar_expanded
 
+        icon_color = self._current_theme.get("icon_color", "#AAAAAA")
         if self._sidebar_expanded:
             self.sidebar_panel.show()
             self.resize(SIDEBAR_EXPANDED_WINDOW_WIDTH, self.height())
-            self.sidebar_toggle_btn.setText("◀")
+            self.sidebar_toggle_btn.setIcon(_make_svg_icon("ic_menu_close", icon_color))
             self.sidebar_toggle_btn.setToolTip("채팅 목록 닫기")
         else:
             self.sidebar_panel.hide()
             self.resize(WINDOW_WIDTH, self.height())
-            self.sidebar_toggle_btn.setText("▶")
+            self.sidebar_toggle_btn.setIcon(_make_svg_icon("ic_menu", icon_color))
             self.sidebar_toggle_btn.setToolTip("채팅 목록 열기/닫기")
 
         sync_pet_with_bubble(self, self.pet_window)
@@ -1152,26 +1168,18 @@ class ChatWindow(QWidget):
         self.sidebar_panel.setStyleSheet(get_sidebar_style(theme))
         self.session_list_scroll.setStyleSheet(get_sidebar_scroll_style(theme))
 
-        attach_color = "#E0E0E0" if is_dark else "#FFFFFF"
-        attach_text = "#333333"
-        self.attach_btn.setStyleSheet(f"""
-QPushButton {{
-    background-color: {attach_color};
-    color: {attach_text};
-    border-radius: 8px;
-    font-weight: bold;
-    font-size: 12px;
-    padding: 6px 12px;
-    border: 1px solid {'#3A3A3A' if is_dark else '#C8C8C8'};
-}}
-QPushButton:hover {{ background-color: {'#D0D0D0' if is_dark else '#EFEFEF'}; }}
-QPushButton:disabled {{ background-color: {'#2A2A2A' if is_dark else '#F5F5F5'}; color: #AAAAAA; }}
-""")
-
         self.container.set_theme(theme)
         self._update_session_highlight()
 
-        # 설정창이 열려 있으면 함께 테마 갱신
+        icon_color = theme.get("icon_color", "#AAAAAA")
+        self.top_close_btn.setIcon(_make_svg_icon("ic_x_1", icon_color, 14))
+        self.attach_btn.setIcon(_make_svg_icon("ic_file", icon_color, 20))
+        self.send_btn.setIcon(_make_svg_icon("ic_send", "#FFFFFF", 22))
+        if self._sidebar_expanded:
+            self.sidebar_toggle_btn.setIcon(_make_svg_icon("ic_menu_close", icon_color))
+        else:
+            self.sidebar_toggle_btn.setIcon(_make_svg_icon("ic_menu", icon_color))
+
         if hasattr(self, "settings_window") and self.settings_window.isVisible():
             self.settings_window.update_theme(theme)
 
