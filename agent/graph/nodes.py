@@ -65,7 +65,7 @@ def make_planner_node(llm: Runnable, tools: list = None):
     """
     사용자의 요청을 분석해 단계별 실행 계획(Plan)을 수립합니다.
     """
-    planner_llm = llm.with_structured_output(ExecutionPlan)
+    planner_llm = llm.with_structured_output(ExecutionPlan, method="json_mode")
     
     # 도구 정보 요약 생성
     if tools:
