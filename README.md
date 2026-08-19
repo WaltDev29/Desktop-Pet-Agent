@@ -1,4 +1,7 @@
 # Desktop Pet Agent
+<p align="center">
+  <img width="400" alt="logo" src="https://github.com/user-attachments/assets/667ad5ab-348d-4853-841e-42bdc3ccec6a" />
+</p>
 
 Desktop Pet Agent는 데스크톱 화면 위에서 동작하는 캐릭터 기반 인터페이스와 고성능 AI Agent 기능을 결합한 프로그램입니다. LangGraph 기반의 멀티 에이전트 아키텍처를 사용하여 복잡한 작업을 계획하고 실행하며, 사용자와의 자연스러운 상호작용을 지원합니다.
 
