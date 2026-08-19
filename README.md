@@ -7,7 +7,7 @@ Desktop Pet Agent는 데스크톱 화면 위에서 동작하는 캐릭터 기반
 # 프로그램 작동 예시
 | Pet UI 채팅 | 모바일 앱 | 모바일 앱 채팅 |
 |:---:|:---:|:---:|
-| | | |
+|<img width="300" alt="파일탐색" src="https://github.com/user-attachments/assets/4c7225f8-e232-4432-9762-51677d389e49" />|<img width="300" alt="모바일 파일탐색" src="https://github.com/user-attachments/assets/8f3bfb07-1436-463e-8625-6c0c26204318" />|<img width="300" alt="모바일 앱 화면" src="https://github.com/user-attachments/assets/3913af12-6c87-4a20-87ae-5706ed47bfc0" />|
 
 ---
 <br>
