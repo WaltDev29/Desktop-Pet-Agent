@@ -1,16 +1,13 @@
 # Desktop Pet Agent
 
-<img width="1536" height="1024" alt="프로젝트logo" src="https://github.com/user-attachments/assets/485706df-908c-4873-96da-6db80db1f082" />
-
 Desktop Pet Agent는 데스크톱 화면 위에서 동작하는 캐릭터 기반 인터페이스와 고성능 AI Agent 기능을 결합한 프로그램입니다. LangGraph 기반의 멀티 에이전트 아키텍처를 사용하여 복잡한 작업을 계획하고 실행하며, 사용자와의 자연스러운 상호작용을 지원합니다.
 
 <br>
 
 # 프로그램 작동 예시
-|항목|사진|
-|--|--|
-|Text 명령 입력|<img width="553" height="311" alt="예시1" src="https://github.com/user-attachments/assets/a8f52a12-718e-4a8a-86c8-9069198c666f" />|
-|클릭 시 표시 메뉴|<img width="334" height="189" alt="예시2" src="https://github.com/user-attachments/assets/bca6ee3b-73cb-416b-9d43-a4b89a054970" />|
+| Pet UI 채팅 | 모바일 앱 | 모바일 앱 채팅 |
+|:---:|:---:|:---:|
+| | | |
 
 ---
 <br>
@@ -87,7 +84,7 @@ python main.py
 ## ✨ 주요 기능
 - **캐릭터 기반 GUI**: 화면 위를 자유롭게 이동하며 상호작용하는 펫 캐릭터.
 - **동적 MCP 확장**: `config.json` 수정만으로 새로운 기능을 가진 MCP 서버를 즉시 추가하고 실행 가능.
-- **범용 OS & 서비스 제어**: 마우스/키보드 직접 입력, 시각적 인식, 쉘(Shell) 조작뿐만 아니라 이메일, 클라우드 서비스 등 다양한 외부 기능 연동.
+- **OS & 서비스 제어**: 마우스/키보드 직접 입력, 시각적 인식, 쉘(Shell) 조작뿐만 아니라 이메일, 클라우드 서비스 등 다양한 외부 기능 연동.
 - **지능형 작업 실행**: 복잡한 명령을 언어 모델이 인지하고 단계별 분할 실행.
 - **Human-in-the-Loop**: 위험한 명령어 작동 등 파괴적 행동 수행 전 Agent UI를 통한 사전 승인 체계.
 
