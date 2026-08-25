@@ -573,6 +573,26 @@ class ChatWindow(QWidget):
         else:
             self.settings.remove("agent_session_id")
 
+    def reconnect_server(self):
+        """서버와의 웹소켓 연결을 수동으로 재시도합니다."""
+        if hasattr(self, "chat_client") and self.chat_client:
+            self.chat_client.close()
+            
+        self._add_bubble("서버 재연결을 시도합니다...", "pet", add_to_session=False)
+        self.scrollToBottom()
+        
+        from app.chat_network import ChatClient
+        self.chat_client = ChatClient(ws_url="ws://localhost:8000/ws")
+        self.chat_client.session_id = self.current_session.session_id if hasattr(self, 'current_session') and self.current_session else None
+        self.chat_client.signaler.response_received.connect(self.on_response_received)
+        self.chat_client.signaler.error_occurred.connect(self.on_error_occurred)
+        self.chat_client.signaler.connected.connect(self._on_ws_connected)
+        
+        # Race condition 방지: 이미 연결된 상태라면 수동으로 트리거
+        with self.chat_client._ws_lock:
+            if self.chat_client.ws_conn:
+                QTimer.singleShot(0, self._on_ws_connected)
+
     def _on_ws_connected(self):
         # 웹소켓 연결 성공 시, 로컬에 저장된 세션이 있다면 즉시 히스토리 로드
         if self.current_session.session_id:
@@ -834,33 +854,29 @@ class ChatWindow(QWidget):
         self.input_field.setEnabled(not is_busy)
         self.attach_btn.setEnabled(not is_busy)
         if is_busy:
-            self.send_btn.setText("중지 🚫")
+            self.send_btn.setText("")
+            self.send_btn.setIcon(_make_svg_icon("ic_x_1", "#FFFFFF", 22))
             self.send_btn.setEnabled(True)
             self.send_btn.setStyleSheet("""
                 QPushButton {
                     background-color: #C0392B;
-                    color: white;
                     border-radius: 12px;
-                    font-weight: bold;
-                    font-size: 13px;
-                    padding: 8px 16px;
+                    padding: 8px;
                 }
                 QPushButton:hover { background-color: #A93226; }
             """)
         else:
-            self.send_btn.setText("전송")
+            self.send_btn.setText("")
+            self.send_btn.setIcon(_make_svg_icon("ic_send", "#FFFFFF", 22))
             self.send_btn.setEnabled(True)
             self.send_btn.setStyleSheet("""
                 QPushButton {
                     background-color: #2979B0;
-                    color: white;
                     border-radius: 12px;
-                    font-weight: bold;
-                    font-size: 13px;
-                    padding: 8px 16px;
+                    padding: 8px;
                 }
                 QPushButton:hover { background-color: #1A5F8F; }
-                QPushButton:disabled { background-color: #7AA9C8; color: #DDDDDD; }
+                QPushButton:disabled { background-color: #7AA9C8; }
             """)
             self.input_field.setFocus()
 

@@ -87,6 +87,11 @@ class SettingsWindow(QWidget):
         layout.addWidget(self.pet_opacity_label)
         layout.addWidget(self.pet_opacity_slider)
 
+        self.reconnect_btn = QPushButton("서버 재연결")
+        self.reconnect_btn.setStyleSheet("background-color: #2E7D32; color: white; border-radius: 8px; font-size: 13px; font-weight: bold; padding: 8px 16px;")
+        self.reconnect_btn.clicked.connect(self._reconnect_server)
+        layout.addWidget(self.reconnect_btn)
+
         self.mcp_btn = QPushButton("mcp 설정 관리")
         self.mcp_btn.setStyleSheet("background-color: #2979B0; color: white; border-radius: 8px; font-size: 13px; font-weight: bold; padding: 8px 16px;")
         self.mcp_btn.clicked.connect(self._manage_mcp_settings)
@@ -173,6 +178,10 @@ class SettingsWindow(QWidget):
     def mouseReleaseEvent(self, event):
         self._drag_start_cursor_pos = None
         self._drag_start_window_pos = None
+
+    def _reconnect_server(self):
+        self.chat_window.reconnect_server()
+        self.close()
 
     def _manage_mcp_settings(self):
         self.chat_window.setEnabled(False)
