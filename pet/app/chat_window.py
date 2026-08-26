@@ -46,6 +46,7 @@ from app.chat_style import (
     PET_BUBBLE_STYLE_WITH_THINKING,
     PET_BUBBLE_INNER_TEXT_STYLE,
     ERROR_BUBBLE_STYLE,
+    INFO_BUBBLE_STYLE,
     CHAT_SCROLL_AREA_STYLE,
     DARK_THEME,
     LIGHT_THEME,
@@ -578,7 +579,11 @@ class ChatWindow(QWidget):
         if hasattr(self, "chat_client") and self.chat_client:
             self.chat_client.close()
             
-        self._add_bubble("서버 재연결을 시도합니다...", "pet", add_to_session=False)
+        self._clear_bubble_widgets()
+        if hasattr(self, 'current_session') and self.current_session:
+            self.current_session.bubbles.clear()
+            
+        self._add_bubble("서버 재연결 중입니다.", "info", add_to_session=False)
         self.scrollToBottom()
         
         from app.chat_network import ChatClient
@@ -965,7 +970,7 @@ class ChatWindow(QWidget):
         vbox.setSpacing(4)
         vbox.setSizeConstraint(QVBoxLayout.SetFixedSize)
 
-        if msg_type != "error":
+        if msg_type not in ["error", "info"]:
             label = QLabel()
             label.setStyleSheet("color: #888; font-size: 10px; font-weight: bold; margin-bottom: 2px;")
             if msg_type == "user":
@@ -1014,7 +1019,7 @@ class ChatWindow(QWidget):
             vbox.addWidget(bubble_frame)
             apply_shadow(bubble_frame)
         else:
-            # ── 일반 버블 (user, error) ──
+            # ── 일반 버블 (user, error, info) ──
             bubble = QTextBrowser()
             bubble.setOpenExternalLinks(False)
             bubble.anchorClicked.connect(self._on_bubble_link_clicked)
@@ -1029,6 +1034,8 @@ class ChatWindow(QWidget):
                 bubble.setStyleSheet(USER_BUBBLE_STYLE)
             elif msg_type == "error":
                 bubble.setStyleSheet(ERROR_BUBBLE_STYLE)
+            elif msg_type == "info":
+                bubble.setStyleSheet(INFO_BUBBLE_STYLE)
             else:
                 bubble.setStyleSheet(PET_BUBBLE_STYLE)
 
@@ -1038,7 +1045,7 @@ class ChatWindow(QWidget):
 
         if msg_type == "user":
             alignment = Qt.AlignRight
-        elif msg_type == "error":
+        elif msg_type in ["error", "info"]:
             alignment = Qt.AlignHCenter
         else:
             alignment = Qt.AlignLeft

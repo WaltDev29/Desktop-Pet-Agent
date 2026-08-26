@@ -328,6 +328,7 @@ QFrame#thinking_bubble_frame {
 
 PET_BUBBLE_INNER_TEXT_STYLE = _bubble_style("transparent", "#2C3E50", "none")
 ERROR_BUBBLE_STYLE = _bubble_style("#FDEDED", "#E74C3C", "#F5C6CB")
+INFO_BUBBLE_STYLE = _bubble_style("#E3F2FD", "#1565C0", "#BBDEFB")
 
 OPACITY_SLIDER_STYLE = """
 QSlider::groove:horizontal {
