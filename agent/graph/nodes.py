@@ -125,7 +125,28 @@ def make_planner_node(llm: Runnable, tools: list = None):
             plan = res_obj.plan if res_obj and res_obj.plan else []
         except Exception as e:
             logger.error(f"[Planner] 구조화 출력 생성 실패: {e!r}")
+            # 구조화 출력 실패 시 원본 문자열을 복구하여 fallback 처리
+            error_str = str(e)
             plan = []
+            if "Invalid json output:" in error_str:
+                import re
+                raw_output = error_str.split("Invalid json output:")[1]
+                raw_output = re.sub(r"For troubleshooting, visit:.*$", "", raw_output).strip()
+                
+                # 1. JSON 포맷이 텍스트 안에 섞여있는지 확인
+                json_match = re.search(r'(\{.*"plan"\s*:.*?\})', raw_output, re.DOTALL)
+                if json_match:
+                    try:
+                        parsed = json.loads(json_match.group(1))
+                        plan = parsed.get("plan", [])
+                    except:
+                        pass
+                
+                # 2. 그래도 추출 실패했다면 (예: LLM이 도구 호출 태그 자체를 내뱉음), raw text 자체를 계획으로 삼음
+                if not plan and raw_output:
+                    # 마크다운 틱 제거
+                    raw_output = re.sub(r"^```(json)?|```$", "", raw_output.strip()).strip()
+                    plan = [raw_output]
 
         logger.info(f"[Planner] Plan created (length: {len(plan)}): {plan}")
         return {
@@ -156,16 +177,24 @@ def make_master_router_node(llm: Runnable):
         current_task = plan[0]
         remaining_plan = plan[1:]
 
-        decision: WorkerDecision = await router_llm.ainvoke([
-            SystemMessage(content=ROUTER_PROMPT),
-            HumanMessage(content=current_task),
-        ])
+        try:
+            decision: WorkerDecision = await router_llm.ainvoke([
+                SystemMessage(content=ROUTER_PROMPT),
+                HumanMessage(content=current_task),
+            ])
+            worker = decision.worker
+        except Exception as e:
+            logger.error(f"[Router] 구조화 출력 생성 실패: {e!r}")
+            error_str = str(e)
+            worker = "general_mcp_worker"  # 기본값
+            if "vision" in error_str.lower():
+                worker = "vision_worker"
 
-        logger.info(f"[Router] '{current_task}' → {decision.worker}")
+        logger.info(f"[Router] '{current_task}' → {worker}")
         return {
             "plan": remaining_plan,
             "current_task": current_task,
-            "active_worker": decision.worker,
+            "active_worker": worker,
             "tool_call_count": 0,  # 새 태스크 시작 시 카운터 초기화
         }
     return master_router_node
