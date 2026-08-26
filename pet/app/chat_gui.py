@@ -427,13 +427,28 @@ class ThinkingWidget(QWidget):
 
     def update_thinking(self, thinking_html: str):
         self._thinking_html = thinking_html
+        
+        vbar = self._content_browser.verticalScrollBar()
+        is_at_bottom = vbar.value() >= vbar.maximum() - 5
+        saved_value = vbar.value()
+        
+        self._content_browser.setUpdatesEnabled(False)
         self._content_browser.setHtml(thinking_html)
+        
         if self._expanded:
             doc_h = int(self._content_browser.document().size().height())
             self._content_browser.setFixedHeight(min(doc_h + 10, 300))
-            QTimer.singleShot(50, lambda: self._content_browser.verticalScrollBar().setValue(
-                self._content_browser.verticalScrollBar().maximum()
-            ))
+            
+            def restore_scroll():
+                if is_at_bottom:
+                    vbar.setValue(vbar.maximum())
+                else:
+                    vbar.setValue(saved_value)
+                self._content_browser.setUpdatesEnabled(True)
+                
+            QTimer.singleShot(0, restore_scroll)
+        else:
+            self._content_browser.setUpdatesEnabled(True)
 
     def is_expanded(self) -> bool:
         return self._expanded

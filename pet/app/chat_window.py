@@ -182,8 +182,16 @@ class ChatWindow(QWidget):
         self.bubble_widgets: list[QTextBrowser] = []
         
         self.btn_area = QWidget()
-        self.btn_layout = QHBoxLayout(self.btn_area)
-        self.btn_layout.setContentsMargins(5, 2, 5, 2)
+        self.btn_area_layout = QVBoxLayout(self.btn_area)
+        self.btn_area_layout.setContentsMargins(5, 5, 5, 5)
+        self.btn_area_layout.setSpacing(6)
+        
+        self.approval_msg_label = QLabel()
+        self.approval_msg_label.setWordWrap(True)
+        self.approval_msg_label.setStyleSheet("color: #E0E0E0; font-size: 13px; font-weight: bold;")
+        
+        self.btn_layout = QHBoxLayout()
+        self.btn_layout.setContentsMargins(0, 0, 0, 0)
         
         self.approve_btn = QPushButton("승인")
         self.reject_btn = QPushButton("거절")
@@ -196,6 +204,9 @@ class ChatWindow(QWidget):
         
         self.btn_layout.addWidget(self.approve_btn)
         self.btn_layout.addWidget(self.reject_btn)
+        
+        self.btn_area_layout.addWidget(self.approval_msg_label)
+        self.btn_area_layout.addLayout(self.btn_layout)
         self.btn_area.hide()
 
         # ── 상단 버튼 영역 (토글 + 신규 채팅 / 설정) ─────────────────
@@ -232,7 +243,13 @@ class ChatWindow(QWidget):
         self.top_close_btn.clicked.connect(self.close_program)
         self.top_close_btn.setToolTip("프로그램 종료")
 
+        self.chat_title_label = QLabel(self.current_session.title if self.current_session else "새 대화")
+        self.chat_title_label.setAlignment(Qt.AlignCenter)
+        self.chat_title_label.setStyleSheet("font-size: 14px; font-weight: bold;")
+
         top_btn_layout.addWidget(self.sidebar_toggle_btn)
+        top_btn_layout.addStretch()
+        top_btn_layout.addWidget(self.chat_title_label)
         top_btn_layout.addStretch()
         top_btn_layout.addWidget(self.top_close_btn)
 
@@ -342,6 +359,7 @@ class ChatWindow(QWidget):
         self.chat_client.signaler.response_received.connect(self.on_response_received)
         self.chat_client.signaler.error_occurred.connect(self.on_error_occurred)
         self.chat_client.signaler.connected.connect(self._on_ws_connected)
+        self.chat_client.signaler.status_updated.connect(self._update_connection_status)
 
         # Race condition 방지: 이미 연결된 상태라면 수동으로 트리거
         with self.chat_client._ws_lock:
@@ -437,10 +455,14 @@ class ChatWindow(QWidget):
         """전송 후 첨부 이미지를 모두 제거합니다."""
         for item in list(self.attached_images):
             self.image_preview_layout.removeWidget(item)
-            item.deleteLater()
         self.attached_images.clear()
         self.image_preview_area.hide()
         self._update_attach_btn_state()
+
+    def update_chat_title(self):
+        """상단 채팅방 제목 라벨을 업데이트합니다."""
+        if hasattr(self, 'chat_title_label') and self.current_session:
+            self.chat_title_label.setText(self.current_session.title)
 
     def prepare_new_chat(self):
         """신규 채팅을 입력할 수 있도록 UI를 초기화하고 임시 세션 상태로 전환합니다."""
@@ -456,6 +478,7 @@ class ChatWindow(QWidget):
         # 사이드바에 임시 항목 추가
         self._add_session_item(new_session, index=0)
         self._update_session_highlight()
+        self.update_chat_title()
         
         # 화면 초기화
         self._clear_bubble_widgets()
@@ -483,6 +506,7 @@ class ChatWindow(QWidget):
         
         # 사이드바 업데이트 (sync_session_list 사용)
         self.sync_session_list([s.session_id for s in self.sessions if s.session_id])
+        self.update_chat_title()
         
         # 서버로 알림
         payload = {"type": "session_created", "payload": {"session_id": new_sid}}
@@ -537,6 +561,25 @@ class ChatWindow(QWidget):
         # 하단 설정 / 종료 버튼 영역
         panel_bottom_layout = QVBoxLayout()
         panel_bottom_layout.setSpacing(6)
+
+        self.connection_status_btn = QPushButton("🔴 서버 확인 중")
+        self.connection_status_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(0, 0, 0, 0.2);
+                color: #888888;
+                border: none;
+                border-radius: 8px;
+                font-size: 13px;
+                font-weight: bold;
+                padding: 8px;
+                text-align: center;
+            }
+            QPushButton:hover { background-color: rgba(0, 0, 0, 0.4); }
+        """)
+        self.connection_status_btn.setToolTip("클릭하여 재연결 시도")
+        self.connection_status_btn.clicked.connect(self.reconnect_server)
+
+        panel_bottom_layout.addWidget(self.connection_status_btn)
         panel_bottom_layout.addWidget(self.settings_btn)
         panel_bottom_layout.addWidget(self.logout_btn)
         
@@ -562,6 +605,53 @@ class ChatWindow(QWidget):
 
         sync_pet_with_bubble(self, self.pet_window)
 
+    def _update_connection_status(self, is_alive: bool, is_logged_in: bool, is_local_mode: bool):
+        if not is_alive:
+            self.connection_status_btn.setText("⚫ 서버 오프라인")
+            self.connection_status_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(0, 0, 0, 0.2);
+                    color: #888888;
+                    border: none;
+                    border-radius: 8px;
+                    font-size: 13px;
+                    font-weight: bold;
+                    padding: 8px;
+                    text-align: center;
+                }
+                QPushButton:hover { background-color: rgba(0, 0, 0, 0.4); }
+            """)
+        elif not is_local_mode and is_logged_in:
+            self.connection_status_btn.setText("🟢 온라인")
+            self.connection_status_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(0, 0, 0, 0.2);
+                    color: #4CAF50;
+                    border: none;
+                    border-radius: 8px;
+                    font-size: 13px;
+                    font-weight: bold;
+                    padding: 8px;
+                    text-align: center;
+                }
+                QPushButton:hover { background-color: rgba(0, 0, 0, 0.4); }
+            """)
+        else:
+            self.connection_status_btn.setText("🔴 로컬 모드")
+            self.connection_status_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: rgba(0, 0, 0, 0.2);
+                    color: #FFA500;
+                    border: none;
+                    border-radius: 8px;
+                    font-size: 13px;
+                    font-weight: bold;
+                    padding: 8px;
+                    text-align: center;
+                }
+                QPushButton:hover { background-color: rgba(0, 0, 0, 0.4); }
+            """)
+
     # ── 세션 저장/복원 ────────────────────────────────────────────
 
     def _save_local_sessions(self):
@@ -579,6 +669,21 @@ class ChatWindow(QWidget):
         if hasattr(self, "chat_client") and self.chat_client:
             self.chat_client.close()
             
+        self.connection_status_btn.setText("🔴 서버 확인 중")
+        self.connection_status_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(0, 0, 0, 0.2);
+                color: #888888;
+                border: none;
+                border-radius: 8px;
+                font-size: 13px;
+                font-weight: bold;
+                padding: 8px;
+                text-align: center;
+            }
+            QPushButton:hover { background-color: rgba(0, 0, 0, 0.4); }
+        """)
+
         self._clear_bubble_widgets()
         if hasattr(self, 'current_session') and self.current_session:
             self.current_session.bubbles.clear()
@@ -592,6 +697,7 @@ class ChatWindow(QWidget):
         self.chat_client.signaler.response_received.connect(self.on_response_received)
         self.chat_client.signaler.error_occurred.connect(self.on_error_occurred)
         self.chat_client.signaler.connected.connect(self._on_ws_connected)
+        self.chat_client.signaler.status_updated.connect(self._update_connection_status)
         
         # Race condition 방지: 이미 연결된 상태라면 수동으로 트리거
         with self.chat_client._ws_lock:
@@ -609,6 +715,7 @@ class ChatWindow(QWidget):
         self.current_session = session
         self.chat_client.session_id = session.session_id
         self._save_local_sessions()
+        self.update_chat_title()
         
         # 만약 로컬에 이미 보존된 대화 이력이 있다면 즉시 복원 (사용자 경험/반응성 극대화)
         if session.bubbles:
@@ -639,18 +746,29 @@ class ChatWindow(QWidget):
         """사이드바 목록에 세션 항목 버튼(+삭제 버튼)을 행 위젯으로 추가합니다."""
         row = QWidget()
         row.setStyleSheet("background: transparent;")
+        row.setFixedWidth(164)
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(2)
 
-        btn = QPushButton(f"{session.title}")
+        display_title = session.title if session.title else ""
+        if len(display_title) > 12:
+            display_title = display_title[:12] + "..."
+
+        btn = QPushButton(f"{display_title}")
         btn.setStyleSheet(get_session_item_style(self._current_theme))
         btn.setToolTip(session.title)
+        
+        btn.setFixedWidth(134)
+
         btn.clicked.connect(lambda checked=False, s=session: self._on_session_clicked(s))
 
-        del_btn = QPushButton("X")
+        del_btn = QPushButton()
         del_btn.setFixedSize(28, 28)
         del_btn.setToolTip("이 세션 삭제")
+        icon_color = self._current_theme.get("icon_color", "#888888") if isinstance(self._current_theme, dict) else "#888888"
+        del_btn.setIcon(_make_svg_icon("ic_x_2", icon_color))
+        del_btn.setIconSize(QSize(14, 14))
         del_btn.setStyleSheet("""
             QPushButton {
                 background-color: transparent;
@@ -683,7 +801,10 @@ class ChatWindow(QWidget):
         for item in self._session_item_btns:
             s, btn = item[0], item[1]
             if s is session:
-                btn.setText(f"{session.title}")
+                display_title = session.title if session.title else ""
+                if len(display_title) > 12:
+                    display_title = display_title[:12] + "..."
+                btn.setText(f"{display_title}")
                 btn.setToolTip(session.title)
                 self._save_local_sessions()
                 break
@@ -743,10 +864,14 @@ class ChatWindow(QWidget):
         for s in self.sessions:
             self._add_session_item(s)
 
+        self._update_session_highlight()
+        self.update_chat_title()
+
         # 5. 활성 세션 업데이트
         if self.current_session.session_id not in session_ids and self.current_session.session_id is not None and self.sessions:
             self.current_session = self.sessions[0]
             self.chat_client.session_id = self.current_session.session_id
+            self.update_chat_title()
             
         self._update_session_highlight()
         self._save_local_sessions()
@@ -1108,9 +1233,6 @@ class ChatWindow(QWidget):
     def process_btn(self, choice: str):
         self.btn_area.hide()
         is_approved = (choice == "approved")
-        
-        text = "위험 작업 승인 확인" if is_approved else "위험 작업 거절 확인"
-        self._add_bubble(convert_markdown_to_html(text), "pet")
 
         self.set_agent_busy(True)
         self.scrollToBottom()
@@ -1129,9 +1251,7 @@ class ChatWindow(QWidget):
         safe_error = html.escape(error)
         self._add_bubble(f"⚠️ {safe_error}", "error")
         self.scrollToBottom()
-        self.input_field.setEnabled(True)
-        self.attach_btn.setEnabled(True)
-        self.input_field.setFocus()
+        self.set_agent_busy(False)
 
     # ── 반응형 리사이즈 ──────────────────────────────────────────
     def resizeEvent(self, event):
@@ -1193,6 +1313,10 @@ class ChatWindow(QWidget):
 
         self.container.set_theme(theme)
         self._update_session_highlight()
+
+        title_color = "#FFFFFF" if is_dark else "#000000"
+        if hasattr(self, "chat_title_label"):
+            self.chat_title_label.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {title_color};")
 
         icon_color = theme.get("icon_color", "#AAAAAA")
         self.top_close_btn.setIcon(_make_svg_icon("ic_x_1", icon_color, 14))

@@ -1,5 +1,6 @@
 import threading
 import json
+import os
 
 from PySide6.QtCore import QObject, Signal
 
@@ -7,21 +8,44 @@ class ChatSignaler(QObject):
     response_received = Signal(dict)
     error_occurred = Signal(str)
     connected = Signal()
+    status_updated = Signal(bool, bool, bool)
 
 class ChatClient(QObject):
     def __init__(self, ws_url="ws://localhost:8001/ws", parent=None):
         super().__init__(parent)
         self.ws_url = ws_url
+        agent_server_url = os.getenv("AGENT_SERVER_URL", "http://localhost:8001")
+        self.http_status_url = f"{agent_server_url}/api/status"
         self.signaler = ChatSignaler()
         self.session_id = None
         self.ws_conn = None
         self._ws_lock = threading.Lock()
         self._is_running = True
         self._start_websocket_thread()
+        self._start_status_thread()
 
     def _start_websocket_thread(self):
         thread = threading.Thread(target=self._websocket_worker, daemon=True)
         thread.start()
+
+    def _start_status_thread(self):
+        thread = threading.Thread(target=self._status_worker, daemon=True)
+        thread.start()
+
+    def _status_worker(self):
+        import urllib.request
+        import time
+        while self._is_running:
+            try:
+                req = urllib.request.Request(self.http_status_url)
+                with urllib.request.urlopen(req, timeout=3) as response:
+                    data = json.loads(response.read().decode())
+                    is_logged_in = data.get("is_logged_in", False)
+                    is_local_mode = data.get("is_local_mode", True)
+                    self.signaler.status_updated.emit(True, is_logged_in, is_local_mode)
+            except Exception:
+                self.signaler.status_updated.emit(False, False, True)
+            time.sleep(5)
 
     def _websocket_worker(self):
         from websockets.sync.client import connect
