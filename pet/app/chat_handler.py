@@ -30,11 +30,13 @@ class ChatResponseHandler:
             self.window._current_stream_text = ""
             self.window._current_node_name = None
             self.window.pending_tool_call_id = payload.get("tool_call_id")
+            
+            message_text = payload.get("message", "승인이 필요합니다.")
+            self.window.approval_msg_label.setText(f"{message_text}")
+            
             self.window.btn_area.setVisible(True)
             self.window.input_field.setEnabled(False)
             self.window.attach_btn.setEnabled(False)
-            message_text = payload.get("message", "승인이 필요합니다.")
-            self.window._add_bubble(f"승인 필요: {message_text}", "pet")
             self.window.scrollToBottom()
 
         elif msg_type == "log":
@@ -149,9 +151,7 @@ class ChatResponseHandler:
 
             self.window.scrollToBottom()
             self.window._reset_stream_state()
-            self.window.input_field.setEnabled(True)
-            self.window.attach_btn.setEnabled(True)
-            self.window.input_field.setFocus()
+            self.window.set_agent_busy(False)
 
         elif msg_type == "chat":
             msg_id = payload.get("message_id")
@@ -169,10 +169,7 @@ class ChatResponseHandler:
             self.window.scrollToBottom()
 
         elif msg_type == "approval_response":
-            approve = payload.get("approve", False)
-            text = "위험 작업 승인 확인" if approve else "위험 작업 거절 확인"
-            self.window._add_bubble(convert_markdown_to_html(text), "pet")
-            self.window.scrollToBottom()
+            pass
 
         elif msg_type == "session_sync":
             raw_sessions = payload.get("sessions", [])
