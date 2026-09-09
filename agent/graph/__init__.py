@@ -34,7 +34,7 @@ load_dotenv(BASE_DIR / ".env")
 # 기본값 추가: .env에 USE_OPENAI가 없어도 NoneType 에러 방지
 USE_OPENAI = os.getenv("USE_OPENAI", "false")
 MODEL     = os.getenv("OPENAI_MODEL") if USE_OPENAI.lower() == "true" else os.getenv("API_MODEL")
-API_KEY   = os.getenv("API_KEY", "")  if USE_OPENAI.lower() == "true" else ""
+API_KEY   = os.getenv("API_KEY", "")  if USE_OPENAI.lower() == "true" else os.getenv("LOCAL_API_KEY")
 BASE_URL  = os.getenv("API_BASE_URL", "")
 
 # ==========================================
@@ -67,6 +67,7 @@ async def create_agent():
             base_url=BASE_URL,
             api_key=API_KEY or "x",  # 로컬 서버는 API_KEY가 빈 문자열이면 에러 나는 경우 대비
             default_headers={"User-Agent": "Mozilla/5.0"},
+            reasoning_effort="none"
         )
     
     general_mcp_llm = llm.bind_tools(tools)
