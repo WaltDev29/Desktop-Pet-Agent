@@ -222,11 +222,11 @@ def fit_bubble_size(bubble: QTextBrowser, scroll_area_viewport, max_height: int 
     if max_height is None:
         max_height = BUBBLE_MAX_HEIGHT
     
-    # 최대 너비 = 채팅 스크롤 영역 폭의 70%
+    # 최대 너비 = 채팅 스크롤 영역 폭의 75%
     scroll_w = scroll_area_viewport.width()
     if scroll_w < 50:
         scroll_w = scroll_area_viewport.parent().width() - 20
-    max_w = max(int(scroll_w * 0.7), 100)
+    max_w = max(int(scroll_w * 0.75), 200)
 
     # === 동적 이미지 크기 조절 ===
     doc = bubble.document()
@@ -298,7 +298,10 @@ def fit_bubble_size(bubble: QTextBrowser, scroll_area_viewport, max_height: int 
     if bubble_frame:
         tw = bubble.property("thinking_widget")
         if tw:
-            ideal_w = max(ideal_w, 180) # 사고과정 토글 버튼의 기본 너비 보장
+            if tw.is_expanded():
+                ideal_w = max_w  # 사고과정 보기 시 로그/코드가 많으므로 최대 너비 부여
+            else:
+                ideal_w = max(ideal_w, 220) # 사고과정 토글 버튼의 기본 너비 보장
 
     # 너비 결정: min(ideal, max_w), 최소 60px
     final_w = max(min(ideal_w, max_w), 60)
@@ -308,6 +311,9 @@ def fit_bubble_size(bubble: QTextBrowser, scroll_area_viewport, max_height: int 
         bubble_frame.setFixedWidth(final_w)
         bubble.setMinimumWidth(10)
         bubble.setMaximumWidth(final_w)
+        tw = bubble.property("thinking_widget")
+        if tw:
+            tw.force_update_height(final_w)
     else:
         bubble.setFixedWidth(final_w)
 
@@ -338,6 +344,7 @@ class ThinkingWidget(QWidget):
     """사고 과정 접기/폴기 토글을 제공하는 Qt 네이티브 위젯.
     HTML 테이블 구조 대신 QPushButton과 QTextBrowser를 VBox으로 조립합니다.
     """
+    toggled = Signal()
 
     def __init__(self, thinking_html: str, parent=None):
         super().__init__(parent)
@@ -413,17 +420,24 @@ class ThinkingWidget(QWidget):
         self._content_browser.hide()
         layout.addWidget(self._content_browser)
 
+    def force_update_height(self, width: int):
+        if self._expanded and width > 24:
+            self._content_browser.document().setTextWidth(width - 24)
+            self._content_browser.document().adjustSize()
+            doc_h = int(self._content_browser.document().size().height())
+            self._content_browser.setFixedHeight(min(doc_h + 12, 300))
+
     def _on_toggle(self):
         self._expanded = not self._expanded
         if self._expanded:
             self._toggle_btn.setText("\U0001f9e0  사고 과정 닫기  ▼")
             self._content_browser.show()
-            doc_h = int(self._content_browser.document().size().height())
-            self._content_browser.setFixedHeight(min(doc_h + 10, 300))
+            self.force_update_height(self.width())
         else:
             self._toggle_btn.setText("\U0001f9e0  사고 과정 보기  ▶")
             self._content_browser.hide()
             self._content_browser.setFixedHeight(0)
+        self.toggled.emit()
 
     def update_thinking(self, thinking_html: str):
         self._thinking_html = thinking_html
@@ -432,23 +446,18 @@ class ThinkingWidget(QWidget):
         is_at_bottom = vbar.value() >= vbar.maximum() - 5
         saved_value = vbar.value()
         
-        self._content_browser.setUpdatesEnabled(False)
         self._content_browser.setHtml(thinking_html)
         
         if self._expanded:
-            doc_h = int(self._content_browser.document().size().height())
-            self._content_browser.setFixedHeight(min(doc_h + 10, 300))
+            self.force_update_height(self.width())
             
             def restore_scroll():
                 if is_at_bottom:
                     vbar.setValue(vbar.maximum())
                 else:
                     vbar.setValue(saved_value)
-                self._content_browser.setUpdatesEnabled(True)
                 
             QTimer.singleShot(0, restore_scroll)
-        else:
-            self._content_browser.setUpdatesEnabled(True)
 
     def is_expanded(self) -> bool:
         return self._expanded
