@@ -55,7 +55,7 @@ class LoginWorker(QThread):
             if data.get("status") == "success":
                 self.login_result.emit(True, data.get("message", ""))
             else:
-                self.login_result.emit(False, data.get("message", "로그인에 실패했습니다."))
+                self.login_result.emit(False, "아이디와 비밀번호가 일치하지 않습니다.")
         except requests.exceptions.ConnectionError:
             self.login_result.emit(False, "에이전트 서버에 연결할 수 없습니다.\n(localhost:8001 실행 여부를 확인하세요)")
         except requests.exceptions.Timeout:
@@ -75,6 +75,7 @@ class LoginWindow(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
 
         main_layout = QVBoxLayout(self)
+        main_layout.setSizeConstraint(QVBoxLayout.SetFixedSize)
         main_layout.setContentsMargins(15, 15, 15, 15)
 
         self.container = BubbleFrame(self)
@@ -159,11 +160,11 @@ class LoginWindow(QWidget):
         self.login_btn.setStyleSheet(LOGIN_BTN_STYLE)
         self.login_btn.clicked.connect(self._try_login)
 
-        signup_link = QLabel('<a href="#" style="color:#5B9BD5; text-decoration:none;">계정이 없으신가요? 회원가입</a>')
-        signup_link.setAlignment(Qt.AlignCenter)
-        signup_link.setStyleSheet(f"font-family: {FONT_FAMILY}; font-size: 11px;")
-        signup_link.setOpenExternalLinks(False)
-        signup_link.linkActivated.connect(self._open_signup)
+        self.signup_link = QLabel('<a href="#" style="color:#5B9BD5; text-decoration:none;">계정이 없으신가요? 회원가입</a>')
+        self.signup_link.setAlignment(Qt.AlignCenter)
+        self.signup_link.setStyleSheet(f"font-family: {FONT_FAMILY}; font-size: 11px;")
+        self.signup_link.setOpenExternalLinks(False)
+        self.signup_link.linkActivated.connect(self._open_signup)
 
         form_layout.addWidget(email_label)
         form_layout.addWidget(self.email_input)
@@ -174,7 +175,7 @@ class LoginWindow(QWidget):
         form_layout.addSpacing(8)
         form_layout.addWidget(self.login_btn)
         form_layout.addSpacing(6)
-        form_layout.addWidget(signup_link)
+        form_layout.addWidget(self.signup_link)
 
         form_wrapper = QHBoxLayout()
         form_wrapper.addStretch()
@@ -229,8 +230,17 @@ class LoginWindow(QWidget):
             self.error_label.show()
             return
 
+        email_regex = r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$'
+        if not re.match(email_regex, email):
+            self.error_label.setText("이메일 형식이 유효하지 않습니다.")
+            self.error_label.show()
+            return
+
         self.login_btn.setEnabled(False)
         self.login_btn.setText("로그인 중...")
+        self.email_input.setEnabled(False)
+        self.password_input.setEnabled(False)
+        self.signup_link.setEnabled(False)
         self.error_label.hide()
 
         self._worker = LoginWorker(email, password)
@@ -240,6 +250,9 @@ class LoginWindow(QWidget):
     def _on_login_result(self, success: bool, message: str):
         self.login_btn.setEnabled(True)
         self.login_btn.setText("로그인")
+        self.email_input.setEnabled(True)
+        self.password_input.setEnabled(True)
+        self.signup_link.setEnabled(True)
 
         if success:
             self.error_label.hide()
