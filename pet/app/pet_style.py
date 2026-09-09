@@ -1,5 +1,5 @@
-PET_WIDTH = 65
-PET_HEIGHT = 65
+PET_WIDTH = 130
+PET_HEIGHT = 130
 PET_MOVIE_PATH = "Assets/bee/bee_fly_2.gif"
 
 

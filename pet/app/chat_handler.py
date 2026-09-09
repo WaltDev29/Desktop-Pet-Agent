@@ -25,6 +25,9 @@ class ChatResponseHandler:
             if msg_session_id and self.window.current_session.session_id and msg_session_id.lower() != self.window.current_session.session_id.lower():
                 return
 
+        if msg_type != "token" and hasattr(self.window, "_stream_update_timer"):
+            self.window._stream_update_timer.stop()
+
         if msg_type == "approval_request":
             self.window._streaming = False
             self.window._current_stream_text = ""
@@ -102,23 +105,11 @@ class ChatResponseHandler:
                     self.window._streaming = True
                     self.window._current_stream_text = ""
                 self.window._current_stream_text += chunk
-                self.window._update_bubble(
-                    self.window._current_response_index,
-                    convert_markdown_to_html(self.window._current_stream_text)
-                )
             else:
                 self.window._thinking_stream_buffer += chunk
-                thinking_content = "\n".join(self.window._thinking_logs) + self.window._thinking_stream_buffer
-                thinking_html = convert_markdown_to_html(thinking_content)
-                self._ensure_thinking_widget(thinking_html)
-                
-                idx = self.window._current_response_index
-                if idx is not None and idx < len(self.window.bubble_widgets):
-                    tw = self.window.bubble_widgets[idx].property("thinking_widget")
-                    if tw and not tw.is_expanded():
-                        tw.set_expanded(True)
 
-            self.window.scrollToBottom()
+            if hasattr(self.window, "_stream_update_timer") and not self.window._stream_update_timer.isActive():
+                self.window._stream_update_timer.start()
 
         elif msg_type == "done":
             self.window._flush_thinking_buffer()
@@ -246,7 +237,32 @@ class ChatResponseHandler:
                     layout.insertWidget(layout.count() - 1, tw)
 
             bubble.setProperty("thinking_widget", tw)
+            tw.toggled.connect(lambda b=bubble: fit_bubble_size(b, self.window.chat_scroll_area.viewport()))
             fit_bubble_size(bubble, self.window.chat_scroll_area.viewport())
         elif tw is not None and thinking_html:
             tw.update_thinking(thinking_html)
             fit_bubble_size(bubble, self.window.chat_scroll_area.viewport())
+
+    def flush_stream_ui(self):
+        if not self.window or self.window.is_shutting_down:
+            return
+        
+        idx = self.window._current_response_index
+        if idx is None or idx >= len(self.window.bubble_widgets):
+            return
+
+        if self.window._current_node_name == "aggregator":
+            self.window._update_bubble(
+                idx,
+                convert_markdown_to_html(self.window._current_stream_text)
+            )
+        else:
+            thinking_content = "\n".join(self.window._thinking_logs) + self.window._thinking_stream_buffer
+            thinking_html = convert_markdown_to_html(thinking_content)
+            self._ensure_thinking_widget(thinking_html)
+            
+            tw = self.window.bubble_widgets[idx].property("thinking_widget")
+            if tw and not tw.is_expanded():
+                tw.set_expanded(True)
+        
+        self.window.scrollToBottom()

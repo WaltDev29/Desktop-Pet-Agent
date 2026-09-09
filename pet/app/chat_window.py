@@ -323,6 +323,7 @@ class ChatWindow(QWidget):
 
         # ── 채팅 영역 위젯 (우측) ────────────────────────────
         chat_area = QWidget()
+        chat_area.setMinimumWidth(320)
         chat_area_layout = QVBoxLayout(chat_area)
         chat_area_layout.setContentsMargins(0, 0, 0, 0)
         chat_area_layout.setSpacing(4)
@@ -346,7 +347,7 @@ class ChatWindow(QWidget):
         layout.addLayout(inner_h_layout)
 
         main_layout.addWidget(self.container)
-        self.setMinimumSize(220, 300)
+        self.setMinimumHeight(800)
         self.setMouseTracking(True)
         self.container.setMouseTracking(True)
         self.container.installEventFilter(self)
@@ -378,11 +379,17 @@ class ChatWindow(QWidget):
         # 사고 과정 로그 누적
         self._thinking_logs: list[str] = []
         self._thinking_stream_buffer = ""
+        
+        self._stream_update_timer = QTimer(self)
+        self._stream_update_timer.setInterval(100)
+        self._stream_update_timer.setSingleShot(True)
 
 
         
 
         self.handler = ChatResponseHandler(self)
+        self._stream_update_timer.timeout.connect(self.handler.flush_stream_ui)
+        
         self.apply_theme("dark")
 
     def attach_image(self):
@@ -1143,6 +1150,9 @@ class ChatWindow(QWidget):
             frame_vbox.addWidget(bubble)
             vbox.addWidget(bubble_frame)
             apply_shadow(bubble_frame)
+            
+            if thinking_widget is not None:
+                thinking_widget.toggled.connect(lambda b=bubble: fit_bubble_size(b, self.chat_scroll_area.viewport()))
         else:
             # ── 일반 버블 (user, error, info) ──
             bubble = QTextBrowser()
