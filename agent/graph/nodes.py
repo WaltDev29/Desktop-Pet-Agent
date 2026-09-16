@@ -50,9 +50,38 @@ class ExecutionPlan(BaseModel):
 DANGEROUS_TOOLS = [
     # 이메일 관련 (발송, 삭제, 계정 추가 등 상태 변경)
     "send_email", "delete_emails", "add_email_account",
-    # OS/시스템 제어 (스크립트 실행, 파일 시스템, 레지스트리, 프로세스 등)
-    "PowerShell", "FileSystem"
 ]
+
+# FileSystem 도구에서 파일 변경/삭제로 간주할 위험 모드 목록
+DANGEROUS_FILESYSTEM_MODES = {
+    # 삭제 관련
+    "delete", "remove", "unlink", "rmdir",
+    # 수정/작성 관련
+    "write", "edit", "modify", "append", "update", "overwrite", "create"
+}
+
+
+def is_dangerous_tool_call(tool_call: dict) -> bool:
+    """
+    주어진 Tool Call이 사용자 승인이 필요한 위험 도구 호출인지 판단합니다.
+    - DANGEROUS_TOOLS에 포함된 도구 (예: 이메일 발송/삭제)
+    - FileSystem 도구 중 파일 수정/삭제 모드(mode/action)
+    """
+    name = tool_call.get("name", "")
+    args = tool_call.get("args", {}) or {}
+
+    # 1. 고정 위험 도구 목록 체크
+    if name in DANGEROUS_TOOLS:
+        return True
+
+    # 2. FileSystem 도구의 경우 mode(또는 action)가 수정/삭제인지 체크
+    if name.lower() in ("filesystem", "filesystem_tool"):
+        mode = str(args.get("mode") or args.get("action") or "").lower().strip()
+        if mode in DANGEROUS_FILESYSTEM_MODES:
+            return True
+
+    return False
+
 
 # Worker 1회 태스크당 최대 도구 호출 횟수 (무한 루프 방지)
 MAX_TOOL_CALLS = 15
@@ -383,7 +412,7 @@ def _make_base_worker(llm_with_tools: Runnable, system_prompt: str, worker_label
             # ---- 위험 도구 전수 스캔 ----
             # LLM이 한 번에 여러 tool_call을 반환할 수 있으므로 [0]만 보면 안 됩니다.
             dangerous_calls = [
-                tc for tc in response.tool_calls if tc["name"] in DANGEROUS_TOOLS
+                tc for tc in response.tool_calls if is_dangerous_tool_call(tc)
             ]
 
             if dangerous_calls:
