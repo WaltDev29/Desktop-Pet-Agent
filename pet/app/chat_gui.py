@@ -217,15 +217,30 @@ def sync_pet_with_bubble(window, pet_window):
     
     pet_window.move(pet_new_x, pet_new_y)
 
-def fit_bubble_size(bubble: QTextBrowser, scroll_area_viewport, max_height: int = None):
-    """말풍선 너비를 내용에 맞추되 최대 70%, 높이도 내용에 맞추되 최대 max_height."""
+def fit_bubble_size(bubble: QTextBrowser, scroll_area_viewport, max_height: int = None, width_changed: bool = True):
+    # 스크롤 영역의 세로 크기에 비례하여 말풍선 최대 높이를 동적으로 결정 (최소 BUBBLE_MAX_HEIGHT, 최대 영역의 60%)
+    scroll_area = scroll_area_viewport.parent()
+    dynamic_max_h = BUBBLE_MAX_HEIGHT
+    if scroll_area:
+        dynamic_max_h = max(BUBBLE_MAX_HEIGHT, int(scroll_area.height() * 0.6))
+        
+    tw = bubble.property("thinking_widget")
+    expanded = tw.is_expanded() if tw else False
+    
     if max_height is None:
-        max_height = BUBBLE_MAX_HEIGHT
+        max_height = dynamic_max_h * 2 if expanded else dynamic_max_h
     
     # 최대 너비 = 채팅 스크롤 영역 폭의 75%
-    scroll_w = scroll_area_viewport.width()
+    # 스크롤바 유무에 따른 너비 진동을 막기 위해 viewport 대신 parent(QScrollArea)의 너비 사용
+    scroll_area = scroll_area_viewport.parent()
+    if scroll_area:
+        scroll_w = scroll_area.width() - 20
+    else:
+        scroll_w = scroll_area_viewport.width()
+        
     if scroll_w < 50:
-        scroll_w = scroll_area_viewport.parent().width() - 20
+        scroll_w = 50
+        
     max_w = max(int(scroll_w * 0.75), 200)
 
     # === 동적 이미지 크기 조절 ===
