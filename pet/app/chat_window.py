@@ -1267,16 +1267,14 @@ class ChatWindow(QWidget):
     def resizeEvent(self, event):
         """창 크기 변경 시 내부 말풍선 및 사고 과정 위젯 크기를 재계산합니다."""
         super().resizeEvent(event)
-        scroll_w = self.chat_scroll_area.viewport().width()
-        if scroll_w < 50:
-            scroll_w = self.chat_scroll_area.width() - 20
-        max_w = max(int(scroll_w * 0.7), 100)
+        
+        # 가로 폭이 변경되었는지 확인하여 불필요한 연산을 줄입니다.
+        width_changed = True
+        if event.oldSize().isValid() and event.oldSize().width() == event.size().width():
+            width_changed = False
 
-        # 일반 말풍선 크기 재계산
         for bubble in self.bubble_widgets:
-            expanded = bubble.property("thinking_expanded") or False
-            max_h = BUBBLE_MAX_HEIGHT * 2 if expanded else BUBBLE_MAX_HEIGHT
-            fit_bubble_size(bubble, self.chat_scroll_area.viewport(), max_height=max_h)
+            fit_bubble_size(bubble, self.chat_scroll_area.viewport(), width_changed=width_changed)
 
     # ── 드래그 이동 ───────────────────────────────────────────
     def _on_drag_started(self, cursor_global: QPoint):

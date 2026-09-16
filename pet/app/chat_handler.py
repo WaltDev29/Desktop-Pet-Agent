@@ -35,6 +35,38 @@ class ChatResponseHandler:
             self.window.pending_tool_call_id = payload.get("tool_call_id")
             
             message_text = payload.get("message", "승인이 필요합니다.")
+            tool_args = payload.get("tool_args")
+            
+            try:
+                if isinstance(tool_args, str):
+                    parsed_args = json.loads(tool_args)
+                else:
+                    parsed_args = tool_args
+                
+                args_str = ""
+                if isinstance(parsed_args, list):
+                    parts = []
+                    for i, arg in enumerate(parsed_args):
+                        if isinstance(arg, dict):
+                            part = "\n".join(f"{k}: {v}" for k, v in arg.items())
+                            if len(parsed_args) > 1:
+                                parts.append(f"[작업 {i+1}]\n{part}")
+                            else:
+                                parts.append(part)
+                        else:
+                            parts.append(str(arg))
+                    args_str = "\n\n".join(parts)
+                elif isinstance(parsed_args, dict):
+                    args_str = "\n".join(f"{k}: {v}" for k, v in parsed_args.items())
+                
+                if not args_str.strip():
+                    args_str = "파라미터 없음"
+                
+                message_text = f"⚠️ 위험한 작업 감지\n도구: {payload.get('tool_name', '알 수 없음')}\n\n[파라미터]\n{args_str}\n\n실행을 허용하시겠습니까?"
+            except Exception as e:
+                message_text += f"\n\n[파싱 오류: {e}]"
+                pass
+            
             self.window.approval_msg_label.setText(f"{message_text}")
             
             self.window.btn_area.setVisible(True)
@@ -160,7 +192,9 @@ class ChatResponseHandler:
             self.window.scrollToBottom()
 
         elif msg_type == "approval_response":
-            pass
+            self.window.btn_area.hide()
+            self.window.set_agent_busy(True)
+            self.window.scrollToBottom()
 
         elif msg_type == "session_sync":
             raw_sessions = payload.get("sessions", [])
