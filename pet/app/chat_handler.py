@@ -160,7 +160,9 @@ class ChatResponseHandler:
             self.window.scrollToBottom()
 
         elif msg_type == "approval_response":
-            pass
+            self.window.btn_area.hide()
+            self.window.set_agent_busy(True)
+            self.window.scrollToBottom()
 
         elif msg_type == "session_sync":
             raw_sessions = payload.get("sessions", [])
