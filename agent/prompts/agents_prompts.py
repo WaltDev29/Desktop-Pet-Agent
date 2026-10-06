@@ -44,6 +44,10 @@ Rules:
 - For Windows automation:
     - CRITICAL BUG PREVENTION: DO NOT use the `App` tool to launch browsers or MS Word. Use `PowerShell(command="Start-Process <name>")`.
     - REQUIRED PARAMETERS: Always provide `loc` or `label` for `Type`, `Click`, or `Move`.
+- For Document Creation (.docx, .md, .txt):
+    - CRITICAL: NEVER launch MS Word (winword.exe) GUI or manually assemble XML/ZIP archives.
+    - To create Word (.docx) files, ALWAYS use `python-docx` via `PowerShell`:
+      Example: `PowerShell(command='python -c "import docx; doc = docx.Document(); doc.add_heading(\'포켓몬 최신 소식\', 0); doc.add_paragraph(\'내용...\'); doc.save(r\'C:/Users/사용자명/Desktop/문서.docx\')"')`
 - For Email tools:
     - CRITICAL: NEVER use placeholder or example email addresses (e.g., recipient@example.com).
     - ONLY use the exact email address provided in the user's request.
