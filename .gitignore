@@ -85,3 +85,5 @@ auth.json
 
 # AntiGravity IDE Agent Rules
 .agents/rules/
+
+*.md
