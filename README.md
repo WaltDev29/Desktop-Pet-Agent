@@ -74,8 +74,33 @@ conda activate pet-ui
 
 ### 3. 환경 변수 및 MCP 설정
 
-1.  **`.env` 설정**: `agent/` 디렉토리에 있는 `.env.example` 파일을 복사하여 `.env`를 생성하고 LLM API 키 등을 입력합니다.
-2.  **`config.json` 설정**: `agent/agent_server/` 디렉토리의 `config.default.json`을 복사하여 `config.json`을 생성합니다. 여기에 사용할 MCP 서버들의 실행 명령과 환경 변수를 정의합니다.
+1. **`.env` 설정**: `agent/` 디렉토리에 있는 `.env.example` 파일을 복사하여 `.env`를 생성하고 LLM API 키 등을 입력합니다.
+2. **`config.json` 설정**: `agent/agent_server/config.default.json`을 복사하여 `agent/agent_server/config.json`을 생성합니다. 사용할 MCP 서버들의 실행 명령, 환경 변수 및 도구 필터링 규칙을 정의합니다.
+
+#### ⚙️ `config.json` 커스텀 제어 옵션
+
+기본 MCP 서버 설정 외에, 에이전트 시스템에서 지원하는 커스텀 제어 필드입니다:
+
+| 필드명 | 타입 | 기본값 | 설명 |
+| :--- | :--- | :---: | :--- |
+| `disabled_tools` | `list[str]` | `[]` | 해당 MCP 서버에서 **제외할 특정 도구 이름 목록** (예: `["Scrape", "Search"]`) |
+| `enabled` | `boolean` | `true` | `false` 설정 시 해당 MCP 서버 전체를 로드에서 제외 |
+
+```json
+{
+  "mcpServers": {
+    "windows-mcp": {
+      "command": "uvx",
+      "args": ["windows-mcp", "serve"],
+      "transport": "stdio",
+      "disabled_tools": [
+        "Scrape",
+        "Search"
+      ]
+    }
+  }
+}
+```
 
 <br>
 

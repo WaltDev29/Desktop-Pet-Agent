@@ -68,7 +68,26 @@ async def get_mcp_tools():
     _mcp_client = MultiServerMCPClient(final_config)
     _mcp_client_config = final_config
     _mcp_source_config = mcp_config
-    return await _mcp_client.get_tools()
+    raw_tools = await _mcp_client.get_tools()
+
+    # 제외할 도구 목록 수집 (서버별 disabled_tools / exclude_tools)
+    excluded = set()
+    for cfg in mcp_config.values():
+        if isinstance(cfg, dict):
+            excluded.update(cfg.get("disabled_tools") or cfg.get("exclude_tools") or [])
+
+    if excluded:
+        filtered_tools = [t for t in raw_tools if t.name not in excluded]
+        logger.info(
+            "[MCP] 제외된 도구 (%d개): %s (전체 %d개 중 %d개 활성화)",
+            len(raw_tools) - len(filtered_tools),
+            list(excluded),
+            len(raw_tools),
+            len(filtered_tools),
+        )
+        return filtered_tools
+
+    return raw_tools
 
 
 def get_mcp_client():
