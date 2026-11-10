@@ -9,6 +9,8 @@ worker에서 통합 관리합니다.
 import asyncio
 import json
 import logging
+import os
+import re
 import shutil
 import sys
 import time
@@ -65,10 +67,41 @@ async def get_mcp_tools():
         logger.warning("[MCP] 등록된 MCP 서버가 없습니다.")
         return []
 
-    _mcp_client = MultiServerMCPClient(final_config)
-    _mcp_client_config = final_config
+    try:
+        # 1차 시도: 모든 서버를 일괄 등록하여 도구를 로드합니다.
+        candidate_client = MultiServerMCPClient(final_config)
+        raw_tools = await candidate_client.get_tools()
+        _mcp_client = candidate_client
+        _mcp_client_config = final_config
+    except Exception as batch_error:
+        # 단일 서버 오류(예: stdio 즉시 종료, HTTP 401/404 등)로 전체가 실패한 경우 개별 서버 격리 모드로 전환합니다.
+        logger.warning(
+            "[MCP] 전체 서버 일괄 연결 중 오류 발생 (%s). 서버별 장애 격리(Fault Tolerance) 모드로 재시도합니다.",
+            batch_error,
+        )
+        healthy_config = {}
+        for server_name, server_cfg in final_config.items():
+            try:
+                single_client = MultiServerMCPClient({server_name: server_cfg})
+                await single_client.get_tools()
+                healthy_config[server_name] = server_cfg
+                logger.info("[MCP] 서버 '%s' 연결 성공", server_name)
+            except Exception as single_error:
+                logger.error(
+                    "[MCP] 서버 '%s' 초기화 실패 (도구 목록에서 제외됨): %s",
+                    server_name,
+                    single_error,
+                )
+
+        if not healthy_config:
+            logger.error("[MCP] 정상 동작하는 MCP 서버가 하나도 없습니다.")
+            return []
+
+        _mcp_client = MultiServerMCPClient(healthy_config)
+        _mcp_client_config = healthy_config
+        raw_tools = await _mcp_client.get_tools()
+
     _mcp_source_config = mcp_config
-    raw_tools = await _mcp_client.get_tools()
 
     # 제외할 도구 목록 수집 (서버별 disabled_tools / exclude_tools)
     excluded = set()
@@ -194,9 +227,23 @@ async def _normalize_mcp_config(mcp_config: dict) -> dict:
             if not url:
                 logger.warning("[MCP] %s: HTTP/SSE transport에는 url이 필요합니다.", name)
                 continue
+            # 'http' 표기를 langchain-mcp-adapters 규격인 'streamable_http'로 표준화합니다.
+            normalized["transport"] = "streamable_http" if transport in {"streamable_http", "streamable-http", "http"} else "sse"
             normalized["url"] = url
             if raw_cfg.get("headers"):
-                normalized["headers"] = raw_cfg["headers"]
+                # 헤더 값에 포함된 ${ENV_VAR} 형태를 시스템 환경변수로 안전하게 치환합니다.
+                resolved_headers = {}
+                for h_key, h_val in raw_cfg["headers"].items():
+                    if isinstance(h_val, str):
+                        resolved_val = re.sub(
+                            r"\$\{([^}]+)\}|\$([A-Za-z0-9_]+)",
+                            lambda m: os.getenv(m.group(1) or m.group(2), ""),
+                            h_val,
+                        )
+                        resolved_headers[h_key] = resolved_val
+                    else:
+                        resolved_headers[h_key] = h_val
+                normalized["headers"] = resolved_headers
             if raw_cfg.get("oauth") == "notion" or raw_cfg.get("oauth") is True:
                 try:
                     from agent_server.notion_oauth import get_valid_token
