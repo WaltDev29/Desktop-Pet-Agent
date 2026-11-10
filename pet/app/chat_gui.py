@@ -395,6 +395,10 @@ class ThinkingWidget(QWidget):
 
         self._content_browser = QTextBrowser()
         self._content_browser.setOpenExternalLinks(False)
+        self._content_browser.setOpenLinks(False)  # 내부 네비게이션(내용 교체) 방지
+        self._content_browser.anchorClicked.connect(
+            lambda url: QDesktopServices.openUrl(url) if not url.toString().startswith("action:") else None
+        )
         self._content_browser.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self._content_browser.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._content_browser.setStyleSheet("""

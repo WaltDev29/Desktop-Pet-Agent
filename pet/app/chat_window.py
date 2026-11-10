@@ -1136,6 +1136,7 @@ class ChatWindow(QWidget):
 
             bubble = QTextBrowser()
             bubble.setOpenExternalLinks(False)
+            bubble.setOpenLinks(False)  # 내부 네비게이션(내용 교체) 방지
             bubble.anchorClicked.connect(self._on_bubble_link_clicked)
             bubble.setHtml(html_content)
             apply_markdown_css(bubble)
@@ -1157,6 +1158,7 @@ class ChatWindow(QWidget):
             # ── 일반 버블 (user, error, info) ──
             bubble = QTextBrowser()
             bubble.setOpenExternalLinks(False)
+            bubble.setOpenLinks(False)  # 내부 네비게이션(내용 교체) 방지
             bubble.anchorClicked.connect(self._on_bubble_link_clicked)
             bubble.setHtml(html_content)
             apply_markdown_css(bubble)
