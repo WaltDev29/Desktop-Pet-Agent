@@ -14,6 +14,7 @@ from PySide6.QtCore import Qt, Signal, QPoint, QTimer, QEvent, QRect, QUrl, QSet
 from PySide6.QtGui import QColor, QPixmap, QCursor, QDesktopServices, QIcon, QPainter
 from PySide6.QtSvg import QSvgRenderer
 
+from app.message_dialog import show_info, show_warning, show_error, ask_yes_no
 from app.chat_style import (
     CHAT_HISTORY_STYLE,
     APPROVE_BTN_STYLE,
@@ -915,14 +916,12 @@ class ChatWindow(QWidget):
         if not sid:
             return
 
-        reply = QMessageBox.question(
+        if not ask_yes_no(
             self,
             "세션 삭제",
             f"'{session.title}' 세션을 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
-        if reply != QMessageBox.Yes:
+            ok_text="삭제", cancel_text="취소", danger=True,
+        ):
             return
 
         # 낙관적 UI 업데이트 후 서버 전송
@@ -1445,21 +1444,20 @@ class ChatWindow(QWidget):
 
     def _handle_logout(self):
         import requests
-        from PySide6.QtWidgets import QMessageBox
         try:
             response = requests.post("http://localhost:8001/api/logout", timeout=5)
             if response.status_code == 200:
                 data = response.json()
                 if data.get("status") == "success":
-                    QMessageBox.information(self, "로그아웃", "성공적으로 로그아웃 되었습니다.")
+                    show_info(self, "로그아웃", "성공적으로 로그아웃 되었습니다.")
                     if self.pet_window:
                         self.pet_window._logged_in = False
                     self.hide()
                     if hasattr(self, 'settings_win') and self.settings_win:
                         self.settings_win.close()
                 else:
-                    QMessageBox.warning(self, "로그아웃 실패", data.get("message", "알 수 없는 오류가 발생했습니다."))
+                    show_warning(self, "로그아웃 실패", data.get("message", "알 수 없는 오류가 발생했습니다."))
             else:
-                QMessageBox.warning(self, "로그아웃 실패", f"서버 오류: {response.status_code}")
+                show_warning(self, "로그아웃 실패", f"서버 오류: {response.status_code}")
         except Exception as e:
-            QMessageBox.critical(self, "로그아웃 오류", f"로그아웃 요청 중 오류가 발생했습니다:\n{str(e)}")
+            show_error(self, "로그아웃 오류", f"로그아웃 요청 중 오류가 발생했습니다:\n{str(e)}")
