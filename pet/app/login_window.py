@@ -10,6 +10,7 @@ from PySide6.QtGui import QColor, QIcon, QPainter
 from PySide6.QtSvg import QSvgRenderer
 
 from app.chat_gui import BubbleFrame
+from app.message_dialog import show_info
 from app.chat_style import (
     LOGIN_INPUT_STYLE, LOGIN_BTN_STYLE, LOGIN_ERROR_LABEL_STYLE, FONT_FAMILY
 )
@@ -219,7 +220,7 @@ class LoginWindow(QWidget):
         self.show()
         self.error_label.hide()
         if success_status:
-            QMessageBox.information(self, "알림", "회원가입이 완료되었습니다!")
+            show_info(self, "알림", "회원가입이 완료되었습니다!")
 
     def _try_login(self):
         email = self.email_input.text().strip()
