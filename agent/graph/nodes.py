@@ -408,7 +408,14 @@ def _make_base_worker(llm_with_tools: Runnable, system_prompt: str, worker_label
         response = await llm_with_tools.ainvoke(msgs)
 
         if response.tool_calls:
-            logger.info(f"[{worker_label}] Tool Calls requested: {response.tool_calls}")
+            num_calls = len(response.tool_calls)
+            if num_calls > 1:
+                tool_names = [tc.get("name") for tc in response.tool_calls]
+                logger.info(
+                    f"[{worker_label}] [병렬 도구 실행] 총 {num_calls}개의 도구가 동시에 비동기 병렬 호출됩니다: {tool_names}"
+                )
+            else:
+                logger.info(f"[{worker_label}] Tool Calls requested: {response.tool_calls}")
             # ---- 위험 도구 전수 스캔 ----
             # LLM이 한 번에 여러 tool_call을 반환할 수 있으므로 [0]만 보면 안 됩니다.
             dangerous_calls = [

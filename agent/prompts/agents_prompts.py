@@ -15,6 +15,13 @@ IMPORTANT GUIDELINES FOR CONCISENESS:
 - DO NOT create over-granular plans. Keep it to 3-5 steps maximum for most tasks.
 - Avoid unnecessary environment checks (e.g., checking if a file exists, checking screen state) unless strictly required for the logic. Assume standard tools will handle basic errors.
 - Combine logical steps where possible.
+- PARALLEL PROCESSING & MERGE RULE (병렬 처리 단일 스텝 통합 필수 규칙):
+    - [단일 스텝 통합 원칙]: 사용자가 서로 독립적인 여러 정보(예: 'A랑 B', 'A, B, C 일정 확인')를 요청한 경우, 이를 절대로 계획(plan) 리스트에서 여러 개의 원소로 나누지 마세요! 반드시 plan 리스트의 '단 1개의 문자열 원소'로 통합해야 합니다.
+      * BAD (금지): {{"plan": ["[병렬 처리] 성수 팝업스토어 검색", "[병렬 처리] 성수 공연 일정 검색"]}} <-- 절대 이렇게 리스트를 쪼개지 마세요!
+      * GOOD (필수): {{"plan": ["[병렬 처리] 성수 팝업스토어 및 공연 일정 동시 조회: 1) 팝업스토어 검색 2) 공연 일정 검색"]}} <-- 반드시 1개의 원소로 합치세요!
+    - [순차 분리 원칙 (데이터 의존성)]: 한 작업의 검색어/인자가 선행 작업의 결과물에 의존하는 경우에만 별개의 순차 스텝으로 나누세요.
+      * 예시: "최신 소식 검색 후 그 소식에 관한 유튜브 영상 검색" -> 1단계: 웹 검색으로 최신 소식/키워드 파악, 2단계: 파악한 키워드로 YouTube 검색
+      * 예시: "검색 후 파일 저장", "파일 저장 후 이메일 발송" 등 선후 인과관계가 필수적인 경우.
 - If the user's request is a simple conversational greeting or generic question that requires no tools, output an empty plan.
 - If the request requires acting on the PC, break it down into clean, high-level logical steps that utilize the AVAILABLE TOOLS.
 - NEVER include a final step just to "summarize", "present", or "report" results to the user. The system's Aggregator node automatically handles final formatting and presentation. Your plan should ONLY contain data retrieval or action steps.
@@ -40,7 +47,11 @@ ENVIRONMENT INFO:
 {env_info}
 
 Rules:
-- Analyze the available tools and choose the most appropriate one for the assigned sub-task.
+- Analyze the available tools and choose the most appropriate one(s) for the assigned sub-task.
+- PARALLEL TOOL CALLING (병렬 도구 동시 호출):
+    - 할당받은 서브태스크에 '[병렬 처리]'가 명시되어 있거나, 상호 독립적인 여러 항목(예: 맛집, 팝업스토어, 공연 등)의 조회가 포함된 경우, 도구를 하나씩 번갈아가며 순차적으로 호출하지 마세요.
+    - 필요한 모든 도구 호출(Multiple Tool Calls)을 한 번의 응답에 동시에 생성(배열 형태)하세요. 시스템이 모든 도구를 병렬로 동시 실행합니다.
+    - 병렬 도구 결과들이 모두 반환된 후, 결과를 종합하여 간결하고 명확하게 보고하세요.
 - For Windows automation:
     - CRITICAL BUG PREVENTION: DO NOT use the `App` tool to launch browsers or MS Word. Use `PowerShell(command="Start-Process <name>")`.
     - REQUIRED PARAMETERS: Always provide `loc` or `label` for `Type`, `Click`, or `Move`.

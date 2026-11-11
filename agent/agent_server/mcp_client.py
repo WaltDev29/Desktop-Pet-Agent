@@ -335,9 +335,9 @@ async def _normalize_mcp_config(mcp_config: dict) -> dict:
             normalized["url"] = url
             if name == "playmcp" or "playmcp.kakao.com" in str(url):
                 await ensure_valid_playmcp_token()
+            resolved_headers = {}
             if raw_cfg.get("headers"):
                 # 헤더 값에 포함된 ${ENV_VAR} 형태를 시스템 환경변수로 안전하게 치환합니다.
-                resolved_headers = {}
                 for h_key, h_val in raw_cfg["headers"].items():
                     if isinstance(h_val, str):
                         resolved_val = re.sub(
@@ -348,6 +348,13 @@ async def _normalize_mcp_config(mcp_config: dict) -> dict:
                         resolved_headers[h_key] = resolved_val
                     else:
                         resolved_headers[h_key] = h_val
+
+            # PlayMCP 등 일부 원격 프록시에서 불완전한 zstd 프레임 반환으로 인한 httpx 디코딩 오류를 방지하기 위해
+            # Accept-Encoding 기본값을 'gzip, deflate'로 지정합니다.
+            if normalized["transport"] == "streamable_http":
+                resolved_headers.setdefault("Accept-Encoding", "gzip, deflate")
+
+            if resolved_headers:
                 normalized["headers"] = resolved_headers
             if raw_cfg.get("oauth") == "notion" or raw_cfg.get("oauth") is True:
                 try:
