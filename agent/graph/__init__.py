@@ -70,8 +70,18 @@ async def create_agent():
             reasoning_effort="none"
         )
     
-    general_mcp_llm = llm.bind_tools(tools)
-    logger.info(f"[Agent] Loaded MCP tools: {[t.name for t in tools]}")
+    # OpenAI 호환 규격 API는 tools 배열 길이가 최대 128개로 제한됩니다.
+    MAX_TOOLS = 128
+    if len(tools) > MAX_TOOLS:
+        logger.warning(
+            f"[Agent] 등록된 도구 수({len(tools)}개)가 모델 한도({MAX_TOOLS}개)를 초과하여 상위 {MAX_TOOLS}개로 제한합니다."
+        )
+        safe_tools = tools[:MAX_TOOLS]
+    else:
+        safe_tools = tools
+
+    general_mcp_llm = llm.bind_tools(safe_tools)
+    logger.info(f"[Agent] Loaded MCP tools: {[t.name for t in safe_tools]}")
 
 
     # ==========================================
