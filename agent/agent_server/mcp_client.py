@@ -7,6 +7,7 @@ worker에서 통합 관리합니다.
 """
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -180,6 +181,9 @@ def _should_rebuild_client() -> bool:
     if current_config != _mcp_source_config:
         return True
 
+    if _has_playmcp_server(current_config) and _is_playmcp_token_expiring():
+        return True
+
     if not _has_notion_oauth_server(current_config):
         return False
 
@@ -208,6 +212,105 @@ def _has_notion_oauth_server(mcp_config: dict) -> bool:
     )
 
 
+def _has_playmcp_server(mcp_config: dict) -> bool:
+    return any(
+        name == "playmcp" or "playmcp.kakao.com" in str(cfg.get("url", ""))
+        for name, cfg in mcp_config.items()
+        if isinstance(cfg, dict)
+    )
+
+
+def _get_jwt_exp(token: str) -> float:
+    try:
+        parts = token.split(".")
+        if len(parts) >= 2:
+            payload_b64 = parts[1]
+            rem = len(payload_b64) % 4
+            if rem > 0:
+                payload_b64 += "=" * (4 - rem)
+            payload_json = base64.urlsafe_b64decode(payload_b64.encode("utf-8"))
+            payload = json.loads(payload_json)
+            return float(payload.get("exp", 0))
+    except Exception:
+        pass
+    return 0.0
+
+
+def _is_playmcp_token_expiring(skew_seconds: int = 10 * 60) -> bool:
+    token = os.getenv("PLAYMCP_API_TOKEN", "")
+    if not token:
+        return True
+    exp = _get_jwt_exp(token)
+    if not exp:
+        return False
+    return (exp - time.time()) <= skew_seconds
+
+
+def _update_env_file(key: str, value: str) -> None:
+    env_path = BASE_DIR / ".env"
+    if not env_path.exists():
+        return
+    try:
+        content = env_path.read_text(encoding="utf-8")
+        pattern = rf"^{key}=.*$"
+        if re.search(pattern, content, flags=re.MULTILINE):
+            new_content = re.sub(pattern, f"{key}={value}", content, flags=re.MULTILINE)
+        else:
+            new_content = content + f"\n{key}={value}\n"
+        env_path.write_text(new_content, encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"[MCP] .env 파일 업데이트 실패 ({key}): {e}")
+
+
+async def ensure_valid_playmcp_token() -> str:
+    """PlayMCP API 토큰이 만료되었거나 만료 임박(10분 전)한 경우 리프레시 토큰으로 자동 갱신합니다."""
+    access_token = os.getenv("PLAYMCP_API_TOKEN", "")
+    refresh_token = os.getenv("PLAYMCP_REFRESH_TOKEN", "")
+    client_id = os.getenv("PLAYMCP_CLIENT_ID", "HElMUWdVoroTsrXxezeTSemg8gXzzCKWARb5MJux8gY")
+
+    if not _is_playmcp_token_expiring():
+        return access_token
+
+    if not refresh_token:
+        logger.warning("[MCP] PlayMCP 리프레시 토큰(PLAYMCP_REFRESH_TOKEN)이 없어 자동 갱신할 수 없습니다.")
+        return access_token
+
+    logger.info("[MCP] PlayMCP 액세스 토큰 만료 또는 만료 임박 감지, 자동 갱신을 시도합니다...")
+    token_url = "https://playauth.kakao.com/playmcp/oauth2/token"
+    payload = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": client_id,
+    }
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(token_url, data=payload)
+            if resp.status_code == 200:
+                data = resp.json()
+                new_access_token = data.get("access_token")
+                new_refresh_token = data.get("refresh_token")
+
+                if new_access_token:
+                    os.environ["PLAYMCP_API_TOKEN"] = new_access_token
+                    _update_env_file("PLAYMCP_API_TOKEN", new_access_token)
+                    logger.info("[MCP] PlayMCP 액세스 토큰 자동 갱신 완료!")
+                    access_token = new_access_token
+
+                if new_refresh_token:
+                    os.environ["PLAYMCP_REFRESH_TOKEN"] = new_refresh_token
+                    _update_env_file("PLAYMCP_REFRESH_TOKEN", new_refresh_token)
+
+                return access_token
+            else:
+                logger.error(f"[MCP] PlayMCP 토큰 갱신 실패 (HTTP {resp.status_code}): {resp.text}")
+    except Exception as e:
+        logger.error(f"[MCP] PlayMCP 토큰 갱신 중 오류 발생: {e}")
+
+    return access_token
+
+
 async def _normalize_mcp_config(mcp_config: dict) -> dict:
     final_config = {}
 
@@ -230,6 +333,8 @@ async def _normalize_mcp_config(mcp_config: dict) -> dict:
             # 'http' 표기를 langchain-mcp-adapters 규격인 'streamable_http'로 표준화합니다.
             normalized["transport"] = "streamable_http" if transport in {"streamable_http", "streamable-http", "http"} else "sse"
             normalized["url"] = url
+            if name == "playmcp" or "playmcp.kakao.com" in str(url):
+                await ensure_valid_playmcp_token()
             if raw_cfg.get("headers"):
                 # 헤더 값에 포함된 ${ENV_VAR} 형태를 시스템 환경변수로 안전하게 치환합니다.
                 resolved_headers = {}
