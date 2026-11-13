@@ -4,10 +4,11 @@ import os
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QPushButton,
     QGraphicsDropShadowEffect, QFrame, QMessageBox, QDialog,
-    QTextEdit, QDialogButtonBox, QCheckBox, QLineEdit, QTabWidget
+    QTextEdit, QDialogButtonBox, QCheckBox, QLineEdit, QTabWidget,
+    QFileDialog
 )
 from PySide6.QtCore import Qt, QPoint
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QColor, QFont, QMovie, QPixmap
 from app.chat_style import (
     CLOSE_BTN_STYLE,
     get_settings_window_style,
@@ -23,6 +24,17 @@ CONFIG_PATH = os.path.join(
 ENV_PATH = os.path.join(
     os.path.dirname(__file__), "..", "..", "agent", ".env"
 )
+PET_SETTINGS_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "pet_settings.json"
+)
+
+def get_default_pet_path():
+    candidate = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Assets", "bee", "bee_fly_2.gif"))
+    if os.path.exists(candidate):
+        return candidate
+    return "Assets/bee/bee_fly_2.gif"
+
+DEFAULT_PET_PATH = get_default_pet_path()
 
 class SettingsWindow(QWidget):
     def __init__(self, chat_window, pet_window=None):
@@ -55,6 +67,15 @@ class SettingsWindow(QWidget):
         self.title_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.title_label)
 
+        # 펫 설정 캐시 변수
+        self.current_pet_path = DEFAULT_PET_PATH
+        self.current_pet_scale = 100
+        self._saved_pet_path = DEFAULT_PET_PATH
+        self._saved_pet_scale = 100
+        self._pet_dirty = False
+        self._pet_preview_movie = None
+        self._load_pet_settings()
+
         # 모델 설정 캐시 변수
         self.local_model = ""
         self.local_base_url = ""
@@ -63,8 +84,9 @@ class SettingsWindow(QWidget):
         self.openai_api_key = ""
         self.is_local = False
 
-        # 상단 탭 위젯 (UI, 모델, MCP)
+        # 상단 탭 위젯 (Pet, UI, 모델, MCP)
         self.tab_widget = QTabWidget()
+        self.tab_widget.addTab(self._init_pet_tab(), "Pet")
         self.tab_widget.addTab(self._init_ui_tab(), "UI")
         self.tab_widget.addTab(self._init_model_tab(), "모델")
         self.tab_widget.addTab(self._init_mcp_tab(), "MCP")
@@ -107,7 +129,7 @@ class SettingsWindow(QWidget):
 
         main_layout.addWidget(self.container)
 
-        self.resize(500, 460)
+        self.resize(500, 480)
 
         # 더티 상태 및 저장값 추적
         self._saved_model_state = {}
@@ -124,9 +146,209 @@ class SettingsWindow(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         self.footer_status_label.setText("")
+        self._load_pet_settings()
         self._load_model_settings()
         self._load_mcp_settings()
         self._on_tab_changed(self.tab_widget.currentIndex())
+
+    # ==========================
+    # 0. Pet 탭
+    # ==========================
+    def _init_pet_tab(self) -> QWidget:
+        w = QWidget()
+        l = QVBoxLayout(w)
+        l.setContentsMargins(14, 10, 14, 10)
+        l.setSpacing(10)
+
+        # 1. 파일 선택 및 초기화 버튼 행
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+
+        self.pet_choose_btn = QPushButton("📁 Image / GIF 불러오기")
+        self.pet_choose_btn.setCursor(Qt.PointingHandCursor)
+        self.pet_choose_btn.clicked.connect(self._choose_pet_file)
+        btn_row.addWidget(self.pet_choose_btn, 1)
+
+        self.pet_reset_btn = QPushButton("기본값 복원")
+        self.pet_reset_btn.setCursor(Qt.PointingHandCursor)
+        self.pet_reset_btn.clicked.connect(self._reset_to_default_pet)
+        btn_row.addWidget(self.pet_reset_btn)
+
+        l.addLayout(btn_row)
+
+        # 2. 이미지/GIF 미리보기 영역 (Frame)
+        self.pet_preview_frame = QFrame()
+        self.pet_preview_frame.setFixedHeight(130)
+        preview_layout = QVBoxLayout(self.pet_preview_frame)
+        preview_layout.setContentsMargins(4, 4, 4, 4)
+        preview_layout.setAlignment(Qt.AlignCenter)
+
+        self.pet_preview_label = QLabel()
+        self.pet_preview_label.setFixedSize(110, 110)
+        self.pet_preview_label.setAlignment(Qt.AlignCenter)
+        self.pet_preview_label.setScaledContents(False)
+        preview_layout.addWidget(self.pet_preview_label)
+
+        l.addWidget(self.pet_preview_frame)
+
+        # 파일 경로 표시 라벨
+        self.pet_path_label = QLabel("")
+        self.pet_path_label.setAlignment(Qt.AlignCenter)
+        self.pet_path_label.setStyleSheet("font-size: 11px;")
+        l.addWidget(self.pet_path_label)
+
+        # 3. 크기 조절 (%로)
+        scale_header = QHBoxLayout()
+        self.pet_scale_title = QLabel("크기 조절:")
+        self.pet_scale_value_label = QLabel(f"{self.current_pet_scale}%")
+        self.pet_scale_value_label.setStyleSheet("font-weight: bold;")
+        scale_header.addWidget(self.pet_scale_title)
+        scale_header.addStretch()
+        scale_header.addWidget(self.pet_scale_value_label)
+        l.addLayout(scale_header)
+
+        self.pet_scale_slider = QSlider(Qt.Horizontal)
+        self.pet_scale_slider.setRange(50, 200)
+        self.pet_scale_slider.setSingleStep(5)
+        self.pet_scale_slider.setValue(self.current_pet_scale)
+        self.pet_scale_slider.valueChanged.connect(self._on_scale_slider_changed)
+        l.addWidget(self.pet_scale_slider)
+
+        l.addStretch()
+
+        self._update_pet_preview()
+        return w
+
+    def _choose_pet_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "캐릭터 이미지 또는 GIF 선택",
+            "",
+            "Image / GIF (*.gif *.png *.jpg *.jpeg *.webp *.bmp);;모든 파일 (*)"
+        )
+        if file_path:
+            self.current_pet_path = os.path.normpath(file_path)
+            self._update_pet_preview()
+            self._check_pet_dirty()
+
+    def _reset_to_default_pet(self):
+        self.current_pet_path = DEFAULT_PET_PATH
+        self.current_pet_scale = 100
+        self.pet_scale_slider.blockSignals(True)
+        self.pet_scale_slider.setValue(100)
+        self.pet_scale_slider.blockSignals(False)
+        self.pet_scale_value_label.setText("100%")
+        self._update_pet_preview()
+        if self.pet_window:
+            self.pet_window.set_scale_percent(100)
+        self._check_pet_dirty()
+
+    def _on_scale_slider_changed(self, value: int):
+        self.current_pet_scale = value
+        self.pet_scale_value_label.setText(f"{value}%")
+        if self.pet_window:
+            self.pet_window.set_scale_percent(value)
+        self._check_pet_dirty()
+
+    def _check_pet_dirty(self):
+        self._pet_dirty = (
+            self.current_pet_path != self._saved_pet_path
+            or self.current_pet_scale != self._saved_pet_scale
+        )
+        if hasattr(self, "tab_widget") and self.tab_widget.currentIndex() == 0:
+            self.common_save_btn.setVisible(self._pet_dirty)
+
+    def _update_pet_preview(self):
+        if not hasattr(self, "pet_preview_label"):
+            return
+
+        path = self.current_pet_path
+        if not path or not os.path.exists(path):
+            path = DEFAULT_PET_PATH
+
+        filename = os.path.basename(path)
+        self.pet_path_label.setText(f"선택된 파일: {filename}")
+        self.pet_path_label.setToolTip(path)
+
+        if self._pet_preview_movie:
+            self._pet_preview_movie.stop()
+            self._pet_preview_movie = None
+
+        if path.lower().endswith(".gif") and os.path.exists(path):
+            self.pet_preview_label.clear()
+            movie = QMovie(path)
+            movie.setScaledSize(self.pet_preview_label.size())
+            self.pet_preview_label.setMovie(movie)
+            movie.start()
+            self._pet_preview_movie = movie
+        elif os.path.exists(path):
+            pix = QPixmap(path)
+            if not pix.isNull():
+                scaled_pix = pix.scaled(
+                    self.pet_preview_label.size(),
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation
+                )
+                self.pet_preview_label.setPixmap(scaled_pix)
+            else:
+                self.pet_preview_label.setText("이미지 불러오기 실패")
+        else:
+            self.pet_preview_label.setText("파일 없음")
+
+    def _load_pet_settings(self):
+        norm_path = os.path.normpath(PET_SETTINGS_PATH)
+        loaded_path = DEFAULT_PET_PATH
+        loaded_scale = 100
+        if os.path.exists(norm_path):
+            try:
+                with open(norm_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    p = data.get("character_path")
+                    if p and os.path.exists(p):
+                        loaded_path = p
+                    loaded_scale = int(data.get("scale_percent", 100))
+            except Exception:
+                pass
+
+        self.current_pet_path = loaded_path
+        self.current_pet_scale = loaded_scale
+        self._saved_pet_path = loaded_path
+        self._saved_pet_scale = loaded_scale
+        self._pet_dirty = False
+
+        if hasattr(self, "pet_scale_slider"):
+            self.pet_scale_slider.blockSignals(True)
+            self.pet_scale_slider.setValue(self.current_pet_scale)
+            self.pet_scale_slider.blockSignals(False)
+            self.pet_scale_value_label.setText(f"{self.current_pet_scale}%")
+            self._update_pet_preview()
+
+        if hasattr(self, "tab_widget") and self.tab_widget.currentIndex() == 0:
+            self.common_save_btn.setVisible(False)
+
+    def _save_pet_settings(self):
+        norm_path = os.path.normpath(PET_SETTINGS_PATH)
+        try:
+            data = {
+                "character_path": self.current_pet_path,
+                "scale_percent": self.current_pet_scale
+            }
+            with open(norm_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+
+            self._saved_pet_path = self.current_pet_path
+            self._saved_pet_scale = self.current_pet_scale
+            self._pet_dirty = False
+            self.common_save_btn.setVisible(False)
+
+            if self.pet_window:
+                self.pet_window.apply_character(self.current_pet_path, self.current_pet_scale)
+
+            self.footer_status_label.setStyleSheet("font-size: 11px; color: #4CAF50; padding: 2px 4px;")
+            self.footer_status_label.setText("✅ 펫 설정 저장 완료!")
+        except Exception as e:
+            self.footer_status_label.setStyleSheet("font-size: 11px; color: #FF6B6B; padding: 2px 4px;")
+            self.footer_status_label.setText(f"❌ 펫 설정 저장 실패: {e}")
 
     # ==========================
     # 1. UI 탭
@@ -250,7 +472,7 @@ class SettingsWindow(QWidget):
             "api_key": self._api_key_edit.text().strip(),
         }
         self._model_dirty = (current != self._saved_model_state)
-        if self.tab_widget.currentIndex() == 1:
+        if self.tab_widget.currentIndex() == 2:
             self.common_save_btn.setVisible(self._model_dirty)
 
     def _check_mcp_dirty(self):
@@ -258,23 +480,27 @@ class SettingsWindow(QWidget):
             return
         current_text = self._mcp_editor.toPlainText().strip()
         self._mcp_dirty = (current_text != self._saved_mcp_text)
-        if self.tab_widget.currentIndex() == 2:
+        if self.tab_widget.currentIndex() == 3:
             self.common_save_btn.setVisible(self._mcp_dirty)
 
     def _on_tab_changed(self, index: int):
         self.footer_status_label.setText("")
-        if index == 1:
-            self.common_save_btn.setVisible(self._model_dirty)
+        if index == 0:
+            self.common_save_btn.setVisible(self._pet_dirty)
         elif index == 2:
+            self.common_save_btn.setVisible(self._model_dirty)
+        elif index == 3:
             self.common_save_btn.setVisible(self._mcp_dirty)
         else:
             self.common_save_btn.setVisible(False)
 
     def _on_common_save_clicked(self):
         idx = self.tab_widget.currentIndex()
-        if idx == 1:
-            self._save_model_settings()
+        if idx == 0:
+            self._save_pet_settings()
         elif idx == 2:
+            self._save_model_settings()
+        elif idx == 3:
             self._save_mcp_settings()
 
     # ==========================
@@ -330,7 +556,7 @@ class SettingsWindow(QWidget):
             "api_key": self._api_key_edit.text().strip(),
         }
         self._model_dirty = False
-        if self.tab_widget.currentIndex() == 1:
+        if self.tab_widget.currentIndex() == 2:
             self.common_save_btn.setVisible(False)
 
     def _on_local_toggled(self, checked: bool):
@@ -457,7 +683,7 @@ class SettingsWindow(QWidget):
             self._mcp_editor.blockSignals(False)
             self._saved_mcp_text = formatted.strip()
             self._mcp_dirty = False
-            if self.tab_widget.currentIndex() == 2:
+            if self.tab_widget.currentIndex() == 3:
                 self.common_save_btn.setVisible(False)
         except FileNotFoundError:
             self._mcp_editor.setPlainText("{}")
@@ -514,6 +740,51 @@ class SettingsWindow(QWidget):
         self.pet_opacity_label.setStyleSheet(label_style)
         self.chat_opacity_slider.setStyleSheet(slider_style)
         self.pet_opacity_slider.setStyleSheet(slider_style)
+
+        if hasattr(self, "pet_scale_title"):
+            self.pet_scale_title.setStyleSheet(label_style)
+            self.pet_scale_value_label.setStyleSheet(label_style)
+            self.pet_scale_slider.setStyleSheet(slider_style)
+
+            preview_bg = "#1A1D23" if is_dark else "#F3F4F6"
+            preview_border = "#3A3F4B" if is_dark else "#D0D4DC"
+            self.pet_preview_frame.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {preview_bg};
+                    border: 1px dashed {preview_border};
+                    border-radius: 8px;
+                }}
+            """)
+
+            path_color = "#AAAAAA" if is_dark else "#555555"
+            self.pet_path_label.setStyleSheet(f"font-size: 11px; color: {path_color};")
+
+            reset_bg = "#3A3A3A" if is_dark else "#E0E0E0"
+            reset_color = "#CCCCCC" if is_dark else "#333333"
+            self.pet_choose_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #2979B0;
+                    color: white;
+                    border-radius: 8px;
+                    font-size: 12px;
+                    font-weight: bold;
+                    padding: 7px 14px;
+                }
+                QPushButton:hover { background-color: #1A5F8F; }
+            """)
+            self.pet_reset_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {reset_bg};
+                    color: {reset_color};
+                    border-radius: 8px;
+                    font-size: 12px;
+                    font-weight: bold;
+                    padding: 7px 14px;
+                }}
+                QPushButton:hover {{
+                    background-color: {'#4A4A4A' if is_dark else '#D0D0D0'};
+                }}
+            """)
 
         self._update_theme_buttons(theme)
         self._update_tab_style(is_dark)

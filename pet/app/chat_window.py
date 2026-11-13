@@ -348,7 +348,7 @@ class ChatWindow(QWidget):
         layout.addLayout(inner_h_layout)
 
         main_layout.addWidget(self.container)
-        self.setMinimumHeight(800)
+        self.setMinimumHeight(600)
         self.setMouseTracking(True)
         self.container.setMouseTracking(True)
         self.container.installEventFilter(self)

@@ -1,7 +1,9 @@
+import json
+import os
 import random
 from PySide6.QtWidgets import QWidget, QLabel, QApplication
 from PySide6.QtCore import Qt, QTimer, QPoint
-from PySide6.QtGui import QMovie, QPainter
+from PySide6.QtGui import QMovie, QPainter, QPixmap
 
 from app.chat_window import ChatWindow
 from app.login_window import LoginWindow
@@ -17,31 +19,58 @@ from app.pet_style import (
     MOVEMENT_Y_MAX_RATIO
 )
 
+PET_SETTINGS_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "pet_settings.json"
+)
+
 class DirectionalPetLabel(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.movie = None
+        self.pixmap_image = None
         self.h_flip = False
 
     def setMovie(self, movie):
+        if self.movie:
+            try:
+                self.movie.frameChanged.disconnect(self.update)
+            except Exception:
+                pass
         self.movie = movie
+        self.pixmap_image = None
         if self.movie:
             self.movie.frameChanged.connect(self.update)
+        self.update()
+
+    def setStaticPixmap(self, pixmap):
+        if self.movie:
+            try:
+                self.movie.frameChanged.disconnect(self.update)
+            except Exception:
+                pass
+            self.movie.stop()
+            self.movie = None
+        self.pixmap_image = pixmap
+        self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
+        pix = None
         if self.movie:
-            pixmap = self.movie.currentPixmap()
-            if not pixmap.isNull():
-                painter.save()
-                if self.h_flip:
-                    # 가로축 기준 반전 (오른쪽 이동 시 반전)
-                    painter.scale(-1, 1)
-                    painter.translate(-self.width(), 0)
-                # 라벨 위젯의 사각형 영역 크기에 픽스맵을 맞추어 그림
-                painter.drawPixmap(self.rect(), pixmap)
-                painter.restore()
-                return
+            pix = self.movie.currentPixmap()
+        elif self.pixmap_image and not self.pixmap_image.isNull():
+            pix = self.pixmap_image
+
+        if pix and not pix.isNull():
+            painter.save()
+            if self.h_flip:
+                # 가로축 기준 반전 (오른쪽 이동 시 반전)
+                painter.scale(-1, 1)
+                painter.translate(-self.width(), 0)
+            # 라벨 위젯의 사각형 영역 크기에 픽스맵을 맞추어 그림
+            painter.drawPixmap(self.rect(), pix)
+            painter.restore()
+            return
         super().paintEvent(event)
 
 class PetWindow(QWidget):
@@ -52,15 +81,19 @@ class PetWindow(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground) 
         self.resize(PET_WIDTH, PET_HEIGHT) 
 
+        self.current_character_path = PET_MOVIE_PATH
+        self.scale_percent = 100
+        self.movie = None
+
         self.pet_label = DirectionalPetLabel(self)
         self.pet_label.setAttribute(Qt.WA_TransparentForMouseEvents) 
         self.pet_label.setGeometry(0, 0, PET_WIDTH, PET_HEIGHT) 
         self.pet_label.setAlignment(Qt.AlignCenter)  
         self.pet_label.setScaledContents(True) 
         
-        self.movie = QMovie(PET_MOVIE_PATH) 
-        self.pet_label.setMovie(self.movie)
-        self.movie.start()
+        # 저장된 펫 설정 불러오기 및 초기화
+        self._load_pet_settings()
+        self.apply_character(self.current_character_path, self.scale_percent)
 
         screen_geo = self.screen().availableGeometry()
         width, height = screen_geo.width(), screen_geo.height()
@@ -99,6 +132,97 @@ class PetWindow(QWidget):
 
         if already_logged_in:
             QTimer.singleShot(100, self._on_login_success)
+
+    def _load_pet_settings(self):
+        norm_path = os.path.normpath(PET_SETTINGS_PATH)
+        if os.path.exists(norm_path):
+            try:
+                with open(norm_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    p = data.get("character_path")
+                    if p and os.path.exists(p):
+                        self.current_character_path = p
+                    self.scale_percent = int(data.get("scale_percent", 100))
+            except Exception:
+                pass
+
+    def apply_character(self, path: str, scale_percent: int = 100):
+        self.scale_percent = max(30, min(300, scale_percent))
+        scale = self.scale_percent / 100.0
+        new_w = max(30, int(PET_WIDTH * scale))
+        new_h = max(30, int(PET_HEIGHT * scale))
+
+        has_pos = hasattr(self, "curr_x") and hasattr(self, "curr_y")
+        if has_pos:
+            old_center_x = self.curr_x + self.width() / 2.0
+            old_center_y = self.curr_y + self.height() / 2.0
+
+        self.resize(new_w, new_h)
+        self.pet_label.setGeometry(0, 0, new_w, new_h)
+        self._update_movement_bounds()
+
+        if has_pos:
+            new_x = old_center_x - new_w / 2.0
+            new_y = old_center_y - new_h / 2.0
+            if hasattr(self, "min_x") and hasattr(self, "max_x"):
+                new_x = max(self.min_x, min(new_x, self.max_x))
+                new_y = max(self.min_y, min(new_y, self.max_y))
+            self.curr_x = new_x
+            self.curr_y = new_y
+            self.move(int(new_x), int(new_y))
+
+        if not path or not os.path.exists(path):
+            path = PET_MOVIE_PATH
+
+        self.current_character_path = path
+        if path.lower().endswith(".gif"):
+            if self.movie:
+                self.movie.stop()
+            self.movie = QMovie(path)
+            self.pet_label.setMovie(self.movie)
+            self.movie.start()
+        else:
+            if self.movie:
+                self.movie.stop()
+                self.movie = None
+            pix = QPixmap(path)
+            self.pet_label.setStaticPixmap(pix)
+
+    def set_scale_percent(self, scale_percent: int):
+        self.scale_percent = max(30, min(300, scale_percent))
+        scale = self.scale_percent / 100.0
+        new_w = max(30, int(PET_WIDTH * scale))
+        new_h = max(30, int(PET_HEIGHT * scale))
+
+        has_pos = hasattr(self, "curr_x") and hasattr(self, "curr_y")
+        if has_pos:
+            old_center_x = self.curr_x + self.width() / 2.0
+            old_center_y = self.curr_y + self.height() / 2.0
+
+        self.resize(new_w, new_h)
+        self.pet_label.setGeometry(0, 0, new_w, new_h)
+        self._update_movement_bounds()
+
+        if has_pos:
+            new_x = old_center_x - new_w / 2.0
+            new_y = old_center_y - new_h / 2.0
+            if hasattr(self, "min_x") and hasattr(self, "max_x"):
+                new_x = max(self.min_x, min(new_x, self.max_x))
+                new_y = max(self.min_y, min(new_y, self.max_y))
+            self.curr_x = new_x
+            self.curr_y = new_y
+            self.move(int(new_x), int(new_y))
+
+    def _update_movement_bounds(self):
+        screen = self.screen()
+        if not screen:
+            return
+        screen_geo = screen.availableGeometry()
+        width, height = screen_geo.width(), screen_geo.height()
+        self.min_x = width * MOVEMENT_X_MIN_RATIO
+        self.max_x = width * MOVEMENT_X_MAX_RATIO - self.width()
+        self.min_y = height * MOVEMENT_Y_MIN_RATIO
+        self.max_y = height * MOVEMENT_Y_MAX_RATIO - self.height()
 
     def update_logic(self):
         if self.is_interacting or self.is_paused:
@@ -204,7 +328,7 @@ class PetWindow(QWidget):
                 self.is_interacting = True
                 pet_center_x = self.x() + (self.width() // 2)
                 login_x = pet_center_x - (self.login_win.width() // 2)
-                login_y = self.y() - self.login_win.height() - 15
+                login_y = self.y() - self.login_win.height()
                 self.login_win.move(login_x, login_y)
                 self.login_win.show()
                 self.login_win.email_input.setFocus()
@@ -214,7 +338,7 @@ class PetWindow(QWidget):
         if self.is_interacting:
             pet_center_x = self.x() + (self.width() // 2)
             chat_x = pet_center_x - (self.chat_win.width() // 2)
-            chat_y = self.y() - self.chat_win.height() - 15
+            chat_y = self.y() - self.chat_win.height()
             self.chat_win.move(chat_x, chat_y)
             self.chat_win.show()
             self.chat_win.input_field.setFocus()
@@ -227,7 +351,7 @@ class PetWindow(QWidget):
         self.is_interacting = True
         pet_center_x = self.x() + (self.width() // 2)
         chat_x = pet_center_x - (self.chat_win.width() // 2)
-        chat_y = self.y() - self.chat_win.height() - 15
+        chat_y = self.y() - self.chat_win.height()
         self.chat_win.move(chat_x, chat_y)
         self.chat_win.show()
         self.chat_win.input_field.setFocus()
