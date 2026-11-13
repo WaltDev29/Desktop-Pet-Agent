@@ -4,7 +4,7 @@ import os
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QPushButton,
     QGraphicsDropShadowEffect, QFrame, QMessageBox, QDialog,
-    QTextEdit, QDialogButtonBox
+    QTextEdit, QDialogButtonBox, QCheckBox, QLineEdit
 )
 from PySide6.QtCore import Qt, QPoint
 from PySide6.QtGui import QColor, QFont
@@ -19,6 +19,9 @@ import requests
 
 CONFIG_PATH = os.path.join(
     os.path.dirname(__file__), "..", "..", "agent", "agent_server", "config.json"
+)
+ENV_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "..", "agent", ".env"
 )
 
 class SettingsWindow(QWidget):
@@ -93,6 +96,11 @@ class SettingsWindow(QWidget):
         self.mcp_btn.clicked.connect(self._manage_mcp_settings)
         layout.addWidget(self.mcp_btn)
 
+        self.model_btn = QPushButton("모델 설정 관리")
+        self.model_btn.setStyleSheet("background-color: #2979B0; color: white; border-radius: 8px; font-size: 13px; font-weight: bold; padding: 8px 16px;")
+        self.model_btn.clicked.connect(self._manage_model_settings)
+        layout.addWidget(self.model_btn)
+
         layout.addStretch()
 
         btn_layout = QHBoxLayout()
@@ -103,7 +111,7 @@ class SettingsWindow(QWidget):
 
         main_layout.addWidget(self.container)
 
-        self.resize(260, 380)
+        self.resize(260, 430)
 
         current_theme = getattr(self.chat_window, "_current_theme", DARK_THEME)
         self.update_theme(current_theme)
@@ -184,6 +192,20 @@ class SettingsWindow(QWidget):
         editor.show()
 
     def _on_mcp_editor_closed(self):
+        self.setEnabled(True)
+        self.chat_window.setEnabled(True)
+        self.raise_()
+        self.activateWindow()
+
+    def _manage_model_settings(self):
+        self.chat_window.setEnabled(False)
+        self.setEnabled(False)
+
+        editor = ModelConfigEditor(self)
+        editor.finished.connect(self._on_model_editor_closed)
+        editor.show()
+
+    def _on_model_editor_closed(self):
         self.setEnabled(True)
         self.chat_window.setEnabled(True)
         self.raise_()
@@ -328,6 +350,306 @@ class MCPConfigEditor(QDialog):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(parsed, f, indent=2, ensure_ascii=False)
             self._set_status("✅ 저장 완료!", ok=True)
+        except Exception as e:
+            self._set_status(f"❌ 저장 실패: {e}", ok=False)
+
+    def _set_status(self, msg: str, ok: bool = True):
+        color = "#4CAF50" if ok else "#FF6B6B"
+        self._status_label.setStyleSheet(f"font-size: 11px; color: {color}; padding: 2px 0;")
+        self._status_label.setText(msg)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_start_cursor_pos = event.globalPosition().toPoint()
+            self._drag_start_window_pos = self.pos()
+
+    def mouseMoveEvent(self, event):
+        if self._drag_start_cursor_pos is not None:
+            delta = event.globalPosition().toPoint() - self._drag_start_cursor_pos
+            self.move(self._drag_start_window_pos + delta)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_start_cursor_pos = None
+        self._drag_start_window_pos = None
+
+
+class ModelConfigEditor(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("모델 설정 관리")
+        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.resize(440, 390)
+
+        self._drag_start_window_pos = None
+        self._drag_start_cursor_pos = None
+
+        self.local_model = ""
+        self.local_base_url = ""
+        self.local_api_key = ""
+        self.openai_model = ""
+        self.openai_api_key = ""
+        self.is_local = False
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(12, 12, 12, 12)
+
+        self._container = QFrame(self)
+        self._container.setObjectName("model_editor_container")
+        self._container.setStyleSheet("""
+            QFrame#model_editor_container {
+                background-color: #23272E;
+                border-radius: 14px;
+                border: 1px solid #3A3F4B;
+            }
+        """)
+
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(18)
+        shadow.setColor(QColor(0, 0, 0, 120))
+        shadow.setOffset(0, 6)
+        self._container.setGraphicsEffect(shadow)
+
+        layout = QVBoxLayout(self._container)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+
+        title = QLabel("🤖  모델 설정 (.env)")
+        title.setStyleSheet("color: #E0E0E0; font-size: 14px; font-weight: bold;")
+        layout.addWidget(title)
+
+        self._local_checkbox = QCheckBox("로컬 모델")
+        self._local_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #E0E0E0;
+                font-size: 13px;
+                font-weight: bold;
+                spacing: 8px;
+            }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+                border-radius: 4px;
+                border: 1px solid #3A3F4B;
+                background-color: #1A1D23;
+            }
+            QCheckBox::indicator:hover {
+                border-color: #2979B0;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #2979B0;
+                border-color: #2979B0;
+            }
+        """)
+        self._local_checkbox.toggled.connect(self._on_local_toggled)
+        layout.addWidget(self._local_checkbox)
+
+        line_edit_style = """
+            QLineEdit {
+                background-color: #1A1D23;
+                color: #E0E0E0;
+                border: 1px solid #3A3F4B;
+                border-radius: 8px;
+                font-size: 12px;
+                padding: 7px 10px;
+            }
+            QLineEdit:focus {
+                border-color: #2979B0;
+            }
+        """
+        label_style = "color: #CCCCCC; font-size: 12px; font-weight: bold;"
+
+        self._model_label = QLabel("모델명:")
+        self._model_label.setStyleSheet(label_style)
+        self._model_edit = QLineEdit()
+        self._model_edit.setStyleSheet(line_edit_style)
+        layout.addWidget(self._model_label)
+        layout.addWidget(self._model_edit)
+
+        self._base_url_container = QWidget()
+        base_url_layout = QVBoxLayout(self._base_url_container)
+        base_url_layout.setContentsMargins(0, 0, 0, 0)
+        base_url_layout.setSpacing(4)
+
+        self._base_url_label = QLabel("Base URL:")
+        self._base_url_label.setStyleSheet(label_style)
+        self._base_url_edit = QLineEdit()
+        self._base_url_edit.setStyleSheet(line_edit_style)
+        base_url_layout.addWidget(self._base_url_label)
+        base_url_layout.addWidget(self._base_url_edit)
+        layout.addWidget(self._base_url_container)
+
+        self._api_key_label = QLabel("API Key:")
+        self._api_key_label.setStyleSheet(label_style)
+        self._api_key_edit = QLineEdit()
+        self._api_key_edit.setStyleSheet(line_edit_style)
+        layout.addWidget(self._api_key_label)
+        layout.addWidget(self._api_key_edit)
+
+        self._status_label = QLabel("")
+        self._status_label.setStyleSheet("font-size: 11px; padding: 2px 0;")
+        self._status_label.setWordWrap(True)
+        layout.addWidget(self._status_label)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+
+        self._save_btn = QPushButton("저장")
+        self._save_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2979B0;
+                color: white;
+                border-radius: 8px;
+                font-size: 13px;
+                font-weight: bold;
+                padding: 8px 24px;
+            }
+            QPushButton:hover { background-color: #1A5F8F; }
+        """)
+        self._save_btn.clicked.connect(self._save)
+
+        self._cancel_btn = QPushButton("닫기")
+        self._cancel_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3A3F4B;
+                color: #CCCCCC;
+                border-radius: 8px;
+                font-size: 13px;
+                font-weight: bold;
+                padding: 8px 24px;
+            }
+            QPushButton:hover { background-color: #4A505E; }
+        """)
+        self._cancel_btn.clicked.connect(self.close)
+
+        btn_row.addStretch()
+        btn_row.addWidget(self._save_btn)
+        btn_row.addWidget(self._cancel_btn)
+        layout.addLayout(btn_row)
+
+        outer.addWidget(self._container)
+
+        self._load()
+
+    def _env_path(self) -> str:
+        return os.path.normpath(ENV_PATH)
+
+    def _read_env_dict(self) -> dict:
+        env_vars = {}
+        path = self._env_path()
+        if not os.path.exists(path):
+            return env_vars
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                s = line.strip()
+                if not s or s.startswith("#") or "=" not in s:
+                    continue
+                k, v = s.split("=", 1)
+                v_clean = v.split("#")[0].strip()
+                env_vars[k.strip()] = v_clean
+        return env_vars
+
+    def _load(self):
+        env = self._read_env_dict()
+        use_openai = env.get("USE_OPENAI", "false").lower() == "true"
+        self.is_local = not use_openai
+
+        self.local_model = env.get("API_MODEL", "")
+        self.local_base_url = env.get("API_BASE_URL", "")
+        self.local_api_key = env.get("LOCAL_API_KEY", "")
+
+        self.openai_model = env.get("OPENAI_MODEL", "gpt-4o-mini")
+        self.openai_api_key = env.get("API_KEY", "")
+
+        self._local_checkbox.blockSignals(True)
+        self._local_checkbox.setChecked(self.is_local)
+        self._local_checkbox.blockSignals(False)
+
+        self._update_fields()
+
+    def _on_local_toggled(self, checked: bool):
+        if self.is_local:
+            self.local_model = self._model_edit.text().strip()
+            self.local_base_url = self._base_url_edit.text().strip()
+            self.local_api_key = self._api_key_edit.text().strip()
+        else:
+            self.openai_model = self._model_edit.text().strip()
+            self.openai_api_key = self._api_key_edit.text().strip()
+
+        self.is_local = checked
+        self._update_fields()
+
+    def _update_fields(self):
+        if self.is_local:
+            self._model_edit.setText(self.local_model)
+            self._base_url_edit.setText(self.local_base_url)
+            self._api_key_edit.setText(self.local_api_key)
+            self._base_url_container.setVisible(True)
+        else:
+            self._model_edit.setText(self.openai_model)
+            self._api_key_edit.setText(self.openai_api_key)
+            self._base_url_container.setVisible(False)
+        self._set_status("", ok=True)
+
+    def _save(self):
+        path = self._env_path()
+        if self.is_local:
+            self.local_model = self._model_edit.text().strip()
+            self.local_base_url = self._base_url_edit.text().strip()
+            self.local_api_key = self._api_key_edit.text().strip()
+            updates = {
+                "USE_OPENAI": "False",
+                "API_MODEL": self.local_model,
+                "API_BASE_URL": self.local_base_url,
+                "LOCAL_API_KEY": self.local_api_key,
+            }
+        else:
+            self.openai_model = self._model_edit.text().strip()
+            self.openai_api_key = self._api_key_edit.text().strip()
+            updates = {
+                "USE_OPENAI": "True",
+                "OPENAI_MODEL": self.openai_model,
+                "API_KEY": self.openai_api_key,
+            }
+
+        try:
+            lines = []
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+
+            updated_keys = set()
+            new_lines = []
+            for line in lines:
+                s = line.strip()
+                matched_key = None
+                if s and not s.startswith("#") and "=" in s:
+                    k = s.split("=", 1)[0].strip()
+                    if k in updates:
+                        matched_key = k
+
+                if matched_key:
+                    comment = ""
+                    if "#" in line:
+                        parts = line.split("#", 1)
+                        if len(parts) > 1 and "=" in parts[0]:
+                            comment = " #" + parts[1].rstrip("\r\n")
+                    new_lines.append(f"{matched_key}={updates[matched_key]}{comment}\n")
+                    updated_keys.add(matched_key)
+                else:
+                    new_lines.append(line)
+
+            for k, v in updates.items():
+                if k not in updated_keys:
+                    new_lines.append(f"{k}={v}\n")
+
+            with open(path, "w", encoding="utf-8") as f:
+                f.writelines(new_lines)
+
+            for k, v in updates.items():
+                os.environ[k] = v
+
+            self._set_status("✅ .env에 저장 완료!", ok=True)
         except Exception as e:
             self._set_status(f"❌ 저장 실패: {e}", ok=False)
 
