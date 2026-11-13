@@ -7,8 +7,8 @@ from PySide6.QtWidgets import (
     QTextEdit, QDialogButtonBox, QCheckBox, QLineEdit, QTabWidget,
     QFileDialog
 )
-from PySide6.QtCore import Qt, QPoint
-from PySide6.QtGui import QColor, QFont, QMovie, QPixmap
+from PySide6.QtCore import Qt, QPoint, QRect
+from PySide6.QtGui import QColor, QFont, QMovie, QPixmap, QPainter, QPen, QPainterPath
 from app.chat_style import (
     CLOSE_BTN_STYLE,
     get_settings_window_style,
@@ -17,6 +17,8 @@ from app.chat_style import (
     DARK_THEME,
 )
 import requests
+
+from app.pet_style import PET_WIDTH, PET_HEIGHT
 
 CONFIG_PATH = os.path.join(
     os.path.dirname(__file__), "..", "..", "agent", "agent_server", "config.json"
@@ -35,6 +37,177 @@ def get_default_pet_path():
     return "Assets/bee/bee_fly_2.gif"
 
 DEFAULT_PET_PATH = get_default_pet_path()
+
+
+class PetPreviewWidget(QWidget):
+    """
+    펫 캐릭터 미리보기 위젯:
+    - 바깥 영역 없는 단일 정사각형 캔버스 (220x220)
+    - 선명하고 명확한 2px 테두리 및 중심 가이드 십자선
+    - 실제 화면에 표시되는 크기(PET_WIDTH=90 기준)와 1:1로 일치하는 실제 크기 반영
+    - 도트 화질 저하 방지 (SmoothPixmapTransform 비활성화로 선명한 픽셀 보존)
+    - 좌우 반전 시각화 지원
+    - 마우스 드래그를 통한 이미지 중심 위치(오프셋) 조절
+    - 중앙 정렬 기능 지원
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(220, 220)
+        self.setCursor(Qt.OpenHandCursor)
+        self.movie = None
+        self.pixmap = None
+        self.current_path = ""
+        self.scale_percent = 100
+        self.offset_x = 0.0
+        self.offset_y = 0.0
+        self.flip_h = False
+        self._is_dragging = False
+        self._drag_start_pos = None
+        self._drag_start_offset = (0.0, 0.0)
+        self.on_offset_changed = None
+        self.is_dark = True
+
+    def set_theme(self, is_dark: bool):
+        self.is_dark = is_dark
+        self.update()
+
+    def set_flip_h(self, flip_h: bool):
+        self.flip_h = flip_h
+        self.update()
+
+    def load_file(self, path: str, scale_percent: int = 100, offset_x: float = 0.0, offset_y: float = 0.0, flip_h: bool = False):
+        self.current_path = path
+        self.scale_percent = scale_percent
+        self.offset_x = offset_x
+        self.offset_y = offset_y
+        self.flip_h = flip_h
+
+        if self.movie:
+            try:
+                self.movie.frameChanged.disconnect(self.update)
+            except Exception:
+                pass
+            self.movie.stop()
+            self.movie = None
+        self.pixmap = None
+
+        if path and os.path.exists(path):
+            if path.lower().endswith(".gif"):
+                self.movie = QMovie(path)
+                self.movie.frameChanged.connect(self.update)
+                self.movie.start()
+            else:
+                self.pixmap = QPixmap(path)
+        self.update()
+
+    def set_scale(self, scale_percent: int):
+        self.scale_percent = scale_percent
+        self.update()
+
+    def set_offset(self, offset_x: float, offset_y: float):
+        self.offset_x = offset_x
+        self.offset_y = offset_y
+        self.update()
+
+    def reset_offset(self):
+        self.offset_x = 0.0
+        self.offset_y = 0.0
+        self.update()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._is_dragging = True
+            self._drag_start_pos = event.pos()
+            self._drag_start_offset = (self.offset_x, self.offset_y)
+            self.setCursor(Qt.ClosedHandCursor)
+
+    def mouseMoveEvent(self, event):
+        if self._is_dragging and self._drag_start_pos:
+            delta = event.pos() - self._drag_start_pos
+            # 좌우 반전 상태이면 마우스 이동 방향도 자연스럽게 맞춰줌
+            dx = -delta.x() if self.flip_h else delta.x()
+            dy = delta.y()
+            self.offset_x = self._drag_start_offset[0] + dx
+            self.offset_y = self._drag_start_offset[1] + dy
+            self.update()
+            if callable(self.on_offset_changed):
+                self.on_offset_changed(self.offset_x, self.offset_y)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self._is_dragging:
+            self._is_dragging = False
+            self.setCursor(Qt.OpenHandCursor)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+
+        # 1. 배경 & 선명한 테두리 (안티앨리어싱 활성화)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        bg_color = QColor("#16191F") if self.is_dark else QColor("#F4F6F9")
+        border_color = QColor("#4A90E2") if self.is_dark else QColor("#2979B0")
+
+        path = QPainterPath()
+        path.addRoundedRect(1, 1, self.width() - 2, self.height() - 2, 10, 10)
+
+        painter.fillPath(path, bg_color)
+        pen = QPen(border_color, 2)
+        painter.setPen(pen)
+        painter.drawPath(path)
+
+        # 2. 중심 십자 가이드선 및 실제 펫 크기 영역 가이드 박스
+        center_x = self.width() / 2.0
+        center_y = self.height() / 2.0
+        guide_color = QColor(255, 255, 255, 45) if self.is_dark else QColor(0, 0, 0, 35)
+        guide_pen = QPen(guide_color, 1, Qt.DashLine)
+        painter.setPen(guide_pen)
+        painter.drawLine(int(center_x), 8, int(center_x), self.height() - 8)
+        painter.drawLine(8, int(center_y), self.width() - 8, int(center_y))
+
+        # 실제 화면에 표시되는 펫 윈도우 크기 (PET_WIDTH * scale)
+        actual_box_w = PET_WIDTH * (self.scale_percent / 100.0)
+        actual_box_h = PET_HEIGHT * (self.scale_percent / 100.0)
+        box_guide_color = QColor(74, 144, 226, 60) if self.is_dark else QColor(41, 121, 176, 50)
+        painter.setPen(QPen(box_guide_color, 1, Qt.DotLine))
+        box_x = int(center_x - actual_box_w / 2.0)
+        box_y = int(center_y - actual_box_h / 2.0)
+        painter.drawRect(QRect(box_x, box_y, int(actual_box_w), int(actual_box_h)))
+
+        # 3. 이미지 / GIF 그리기 (정사각형 영역 내부로 클리핑)
+        painter.setClipPath(path)
+
+        # 도트 / 픽셀 아트의 화질이 뭉개지지 않고 선명하도록 안티앨리어싱 해제
+        painter.setRenderHint(QPainter.Antialiasing, False)
+
+        pix = None
+        if self.movie:
+            pix = self.movie.currentPixmap()
+        elif self.pixmap and not self.pixmap.isNull():
+            pix = self.pixmap
+
+        if pix and not pix.isNull():
+            pw = pix.width()
+            ph = pix.height()
+            if pw > 0 and ph > 0:
+                # 실제 화면(PetWindow)과 정확히 1:1로 일치하는 실제 픽셀 크기 계산!
+                ratio = min(actual_box_w / pw, actual_box_h / ph)
+                target_w = max(1, int(pw * ratio))
+                target_h = max(1, int(ph * ratio))
+
+                painter.save()
+                if self.flip_h:
+                    painter.scale(-1, 1)
+                    painter.translate(-self.width(), 0)
+
+                draw_x = int(center_x - target_w / 2.0 + self.offset_x)
+                draw_y = int(center_y - target_h / 2.0 + self.offset_y)
+
+                painter.drawPixmap(QRect(draw_x, draw_y, target_w, target_h), pix)
+                painter.restore()
+        else:
+            empty_text = "이미지 없음"
+            text_color = QColor("#888888") if self.is_dark else QColor("#999999")
+            painter.setPen(QPen(text_color))
+            painter.drawText(self.rect(), Qt.AlignCenter, empty_text)
 
 class SettingsWindow(QWidget):
     def __init__(self, chat_window, pet_window=None):
@@ -70,8 +243,14 @@ class SettingsWindow(QWidget):
         # 펫 설정 캐시 변수
         self.current_pet_path = DEFAULT_PET_PATH
         self.current_pet_scale = 100
+        self.current_offset_x = 0.0
+        self.current_offset_y = 0.0
+        self.current_flip_h = False
         self._saved_pet_path = DEFAULT_PET_PATH
         self._saved_pet_scale = 100
+        self._saved_offset_x = 0.0
+        self._saved_offset_y = 0.0
+        self._saved_flip_h = False
         self._pet_dirty = False
         self._pet_preview_movie = None
         self._load_pet_settings()
@@ -129,7 +308,7 @@ class SettingsWindow(QWidget):
 
         main_layout.addWidget(self.container)
 
-        self.resize(500, 480)
+        self.resize(500, 570)
 
         # 더티 상태 및 저장값 추적
         self._saved_model_state = {}
@@ -157,8 +336,8 @@ class SettingsWindow(QWidget):
     def _init_pet_tab(self) -> QWidget:
         w = QWidget()
         l = QVBoxLayout(w)
-        l.setContentsMargins(14, 10, 14, 10)
-        l.setSpacing(10)
+        l.setContentsMargins(14, 8, 14, 8)
+        l.setSpacing(8)
 
         # 1. 파일 선택 및 초기화 버튼 행
         btn_row = QHBoxLayout()
@@ -176,20 +355,36 @@ class SettingsWindow(QWidget):
 
         l.addLayout(btn_row)
 
-        # 2. 이미지/GIF 미리보기 영역 (Frame)
-        self.pet_preview_frame = QFrame()
-        self.pet_preview_frame.setFixedHeight(130)
-        preview_layout = QVBoxLayout(self.pet_preview_frame)
-        preview_layout.setContentsMargins(4, 4, 4, 4)
-        preview_layout.setAlignment(Qt.AlignCenter)
+        # 2. 이미지/GIF 단일 정사각형 미리보기 영역 (실제 화면 90px 기준 1:1 실시간 렌더링, 220x220)
+        preview_container = QHBoxLayout()
+        preview_container.setAlignment(Qt.AlignCenter)
 
-        self.pet_preview_label = QLabel()
-        self.pet_preview_label.setFixedSize(110, 110)
-        self.pet_preview_label.setAlignment(Qt.AlignCenter)
-        self.pet_preview_label.setScaledContents(False)
-        preview_layout.addWidget(self.pet_preview_label)
+        self.pet_preview_widget = PetPreviewWidget(self)
+        self.pet_preview_widget.on_offset_changed = self._on_preview_offset_changed
+        preview_container.addWidget(self.pet_preview_widget)
+        l.addLayout(preview_container)
 
-        l.addWidget(self.pet_preview_frame)
+        # 위치 조절 가이드, 중앙 정렬 버튼, 좌우 반전 버튼 행
+        pos_ctrl_row = QHBoxLayout()
+        pos_ctrl_row.setSpacing(8)
+
+        self.pet_guide_label = QLabel("💡 드래그하여 위치 조절")
+        self.pet_guide_label.setStyleSheet("font-size: 11px;")
+        pos_ctrl_row.addWidget(self.pet_guide_label)
+
+        pos_ctrl_row.addStretch()
+
+        self.pet_center_btn = QPushButton("🎯 중앙 정렬")
+        self.pet_center_btn.setCursor(Qt.PointingHandCursor)
+        self.pet_center_btn.clicked.connect(self._center_pet_image)
+        pos_ctrl_row.addWidget(self.pet_center_btn)
+
+        self.pet_flip_btn = QPushButton("↔ 좌우 반전")
+        self.pet_flip_btn.setCursor(Qt.PointingHandCursor)
+        self.pet_flip_btn.clicked.connect(self._toggle_flip_h)
+        pos_ctrl_row.addWidget(self.pet_flip_btn)
+
+        l.addLayout(pos_ctrl_row)
 
         # 파일 경로 표시 라벨
         self.pet_path_label = QLabel("")
@@ -197,7 +392,7 @@ class SettingsWindow(QWidget):
         self.pet_path_label.setStyleSheet("font-size: 11px;")
         l.addWidget(self.pet_path_label)
 
-        # 3. 크기 조절 (%로)
+        # 3. 크기 조절 (30% ~ 300%까지 확장)
         scale_header = QHBoxLayout()
         self.pet_scale_title = QLabel("크기 조절:")
         self.pet_scale_value_label = QLabel(f"{self.current_pet_scale}%")
@@ -208,7 +403,7 @@ class SettingsWindow(QWidget):
         l.addLayout(scale_header)
 
         self.pet_scale_slider = QSlider(Qt.Horizontal)
-        self.pet_scale_slider.setRange(50, 200)
+        self.pet_scale_slider.setRange(30, 300)
         self.pet_scale_slider.setSingleStep(5)
         self.pet_scale_slider.setValue(self.current_pet_scale)
         self.pet_scale_slider.valueChanged.connect(self._on_scale_slider_changed)
@@ -216,8 +411,73 @@ class SettingsWindow(QWidget):
 
         l.addStretch()
 
+        self._update_flip_btn_style()
         self._update_pet_preview()
         return w
+
+    def _on_preview_offset_changed(self, offset_x: float, offset_y: float):
+        self.current_offset_x = offset_x
+        self.current_offset_y = offset_y
+        if self.pet_window:
+            self.pet_window.set_offset(offset_x, offset_y)
+        self._check_pet_dirty()
+
+    def _center_pet_image(self):
+        self.current_offset_x = 0.0
+        self.current_offset_y = 0.0
+        if hasattr(self, "pet_preview_widget"):
+            self.pet_preview_widget.reset_offset()
+        if self.pet_window:
+            self.pet_window.set_offset(0.0, 0.0)
+        self._check_pet_dirty()
+
+    def _toggle_flip_h(self):
+        self.current_flip_h = not self.current_flip_h
+        if hasattr(self, "pet_preview_widget"):
+            self.pet_preview_widget.set_flip_h(self.current_flip_h)
+        if self.pet_window:
+            self.pet_window.set_base_flip(self.current_flip_h)
+        self._update_flip_btn_style()
+        self._check_pet_dirty()
+
+    def _update_flip_btn_style(self):
+        if not hasattr(self, "pet_flip_btn"):
+            return
+        is_dark = getattr(self.chat_window, "_current_theme", DARK_THEME).get("name", "dark") == "dark"
+        if self.current_flip_h:
+            self.pet_flip_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #2979B0;
+                    color: white;
+                    border: 1px solid #3498DB;
+                    border-radius: 6px;
+                    font-size: 11px;
+                    font-weight: bold;
+                    padding: 5px 12px;
+                }
+                QPushButton:hover {
+                    background-color: #1A5F8F;
+                }
+            """)
+        else:
+            center_bg = "#2C3E50" if is_dark else "#E8EEF5"
+            center_color = "#64B5F6" if is_dark else "#1976D2"
+            center_hover = "#34495E" if is_dark else "#D5E2F0"
+            border_c = "#3D566E" if is_dark else "#B8D2EC"
+            self.pet_flip_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {center_bg};
+                    color: {center_color};
+                    border: 1px solid {border_c};
+                    border-radius: 6px;
+                    font-size: 11px;
+                    font-weight: bold;
+                    padding: 5px 12px;
+                }}
+                QPushButton:hover {{
+                    background-color: {center_hover};
+                }}
+            """)
 
     def _choose_pet_file(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -234,18 +494,28 @@ class SettingsWindow(QWidget):
     def _reset_to_default_pet(self):
         self.current_pet_path = DEFAULT_PET_PATH
         self.current_pet_scale = 100
+        self.current_offset_x = 0.0
+        self.current_offset_y = 0.0
+        self.current_flip_h = False
         self.pet_scale_slider.blockSignals(True)
         self.pet_scale_slider.setValue(100)
         self.pet_scale_slider.blockSignals(False)
         self.pet_scale_value_label.setText("100%")
+        if hasattr(self, "pet_preview_widget"):
+            self.pet_preview_widget.reset_offset()
+            self.pet_preview_widget.set_scale(100)
+            self.pet_preview_widget.set_flip_h(False)
+        self._update_flip_btn_style()
         self._update_pet_preview()
         if self.pet_window:
-            self.pet_window.set_scale_percent(100)
+            self.pet_window.apply_character(DEFAULT_PET_PATH, 100, 0.0, 0.0, False)
         self._check_pet_dirty()
 
     def _on_scale_slider_changed(self, value: int):
         self.current_pet_scale = value
         self.pet_scale_value_label.setText(f"{value}%")
+        if hasattr(self, "pet_preview_widget"):
+            self.pet_preview_widget.set_scale(value)
         if self.pet_window:
             self.pet_window.set_scale_percent(value)
         self._check_pet_dirty()
@@ -254,12 +524,15 @@ class SettingsWindow(QWidget):
         self._pet_dirty = (
             self.current_pet_path != self._saved_pet_path
             or self.current_pet_scale != self._saved_pet_scale
+            or abs(self.current_offset_x - self._saved_offset_x) > 0.5
+            or abs(self.current_offset_y - self._saved_offset_y) > 0.5
+            or self.current_flip_h != self._saved_flip_h
         )
         if hasattr(self, "tab_widget") and self.tab_widget.currentIndex() == 0:
             self.common_save_btn.setVisible(self._pet_dirty)
 
     def _update_pet_preview(self):
-        if not hasattr(self, "pet_preview_label"):
+        if not hasattr(self, "pet_preview_widget"):
             return
 
         path = self.current_pet_path
@@ -270,35 +543,21 @@ class SettingsWindow(QWidget):
         self.pet_path_label.setText(f"선택된 파일: {filename}")
         self.pet_path_label.setToolTip(path)
 
-        if self._pet_preview_movie:
-            self._pet_preview_movie.stop()
-            self._pet_preview_movie = None
-
-        if path.lower().endswith(".gif") and os.path.exists(path):
-            self.pet_preview_label.clear()
-            movie = QMovie(path)
-            movie.setScaledSize(self.pet_preview_label.size())
-            self.pet_preview_label.setMovie(movie)
-            movie.start()
-            self._pet_preview_movie = movie
-        elif os.path.exists(path):
-            pix = QPixmap(path)
-            if not pix.isNull():
-                scaled_pix = pix.scaled(
-                    self.pet_preview_label.size(),
-                    Qt.KeepAspectRatio,
-                    Qt.SmoothTransformation
-                )
-                self.pet_preview_label.setPixmap(scaled_pix)
-            else:
-                self.pet_preview_label.setText("이미지 불러오기 실패")
-        else:
-            self.pet_preview_label.setText("파일 없음")
+        self.pet_preview_widget.load_file(
+            path,
+            self.current_pet_scale,
+            self.current_offset_x,
+            self.current_offset_y,
+            self.current_flip_h
+        )
 
     def _load_pet_settings(self):
         norm_path = os.path.normpath(PET_SETTINGS_PATH)
         loaded_path = DEFAULT_PET_PATH
         loaded_scale = 100
+        loaded_offset_x = 0.0
+        loaded_offset_y = 0.0
+        loaded_flip_h = False
         if os.path.exists(norm_path):
             try:
                 with open(norm_path, "r", encoding="utf-8") as f:
@@ -307,14 +566,25 @@ class SettingsWindow(QWidget):
                     if p and os.path.exists(p):
                         loaded_path = p
                     loaded_scale = int(data.get("scale_percent", 100))
+                    loaded_offset_x = float(data.get("offset_x", 0.0))
+                    loaded_offset_y = float(data.get("offset_y", 0.0))
+                    loaded_flip_h = bool(data.get("flip_h", False))
             except Exception:
                 pass
 
         self.current_pet_path = loaded_path
         self.current_pet_scale = loaded_scale
+        self.current_offset_x = loaded_offset_x
+        self.current_offset_y = loaded_offset_y
+        self.current_flip_h = loaded_flip_h
         self._saved_pet_path = loaded_path
         self._saved_pet_scale = loaded_scale
+        self._saved_offset_x = loaded_offset_x
+        self._saved_offset_y = loaded_offset_y
+        self._saved_flip_h = loaded_flip_h
         self._pet_dirty = False
+
+        self._update_flip_btn_style()
 
         if hasattr(self, "pet_scale_slider"):
             self.pet_scale_slider.blockSignals(True)
@@ -331,18 +601,30 @@ class SettingsWindow(QWidget):
         try:
             data = {
                 "character_path": self.current_pet_path,
-                "scale_percent": self.current_pet_scale
+                "scale_percent": self.current_pet_scale,
+                "offset_x": int(round(self.current_offset_x)),
+                "offset_y": int(round(self.current_offset_y)),
+                "flip_h": self.current_flip_h
             }
             with open(norm_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
 
             self._saved_pet_path = self.current_pet_path
             self._saved_pet_scale = self.current_pet_scale
+            self._saved_offset_x = self.current_offset_x
+            self._saved_offset_y = self.current_offset_y
+            self._saved_flip_h = self.current_flip_h
             self._pet_dirty = False
             self.common_save_btn.setVisible(False)
 
             if self.pet_window:
-                self.pet_window.apply_character(self.current_pet_path, self.current_pet_scale)
+                self.pet_window.apply_character(
+                    self.current_pet_path,
+                    self.current_pet_scale,
+                    self.current_offset_x,
+                    self.current_offset_y,
+                    self.current_flip_h
+                )
 
             self.footer_status_label.setStyleSheet("font-size: 11px; color: #4CAF50; padding: 2px 4px;")
             self.footer_status_label.setText("✅ 펫 설정 저장 완료!")
@@ -746,15 +1028,12 @@ class SettingsWindow(QWidget):
             self.pet_scale_value_label.setStyleSheet(label_style)
             self.pet_scale_slider.setStyleSheet(slider_style)
 
-            preview_bg = "#1A1D23" if is_dark else "#F3F4F6"
-            preview_border = "#3A3F4B" if is_dark else "#D0D4DC"
-            self.pet_preview_frame.setStyleSheet(f"""
-                QFrame {{
-                    background-color: {preview_bg};
-                    border: 1px dashed {preview_border};
-                    border-radius: 8px;
-                }}
-            """)
+            if hasattr(self, "pet_preview_widget"):
+                self.pet_preview_widget.set_theme(is_dark)
+
+            if hasattr(self, "pet_guide_label"):
+                guide_color = "#888888" if is_dark else "#666666"
+                self.pet_guide_label.setStyleSheet(f"font-size: 11px; color: {guide_color};")
 
             path_color = "#AAAAAA" if is_dark else "#555555"
             self.pet_path_label.setStyleSheet(f"font-size: 11px; color: {path_color};")
@@ -785,6 +1064,27 @@ class SettingsWindow(QWidget):
                     background-color: {'#4A4A4A' if is_dark else '#D0D0D0'};
                 }}
             """)
+
+            if hasattr(self, "pet_center_btn"):
+                center_bg = "#2C3E50" if is_dark else "#E8EEF5"
+                center_color = "#64B5F6" if is_dark else "#1976D2"
+                center_hover = "#34495E" if is_dark else "#D5E2F0"
+                self.pet_center_btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: {center_bg};
+                        color: {center_color};
+                        border: 1px solid {'#3D566E' if is_dark else '#B8D2EC'};
+                        border-radius: 6px;
+                        font-size: 11px;
+                        font-weight: bold;
+                        padding: 5px 12px;
+                    }}
+                    QPushButton:hover {{
+                        background-color: {center_hover};
+                    }}
+                """)
+
+            self._update_flip_btn_style()
 
         self._update_theme_buttons(theme)
         self._update_tab_style(is_dark)
